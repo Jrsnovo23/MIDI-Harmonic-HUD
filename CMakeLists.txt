@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
-project(MidiHarmonicHUD VERSION 1.0.0 LANGUAGES CXX)
+
+# ============================================================================
+# CRÍTICO: declarar C Y CXX
+# ============================================================================
+# JUCE necesita compilar juceaide (herramienta interna) en C puro.
+# Si solo declaramos CXX, CMake falla con:
+#   "Missing variable is: CMAKE_C_COMPILE_OBJECT"
+project(MidiHarmonicHUD VERSION 1.0.0 LANGUAGES C CXX)
 
 # ============================================================================
 # C++17 (más seguro que C++20 en toolchains antiguos)
@@ -11,9 +18,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ============================================================================
 # CRÍTICO PARA MAC PRO 5,1 + HIGH SIERRA
 # ============================================================================
-# Solo x86_64 (nada de ARM)
 set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "Solo Intel" FORCE)
-# Deployment target macOS 10.13
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "High Sierra" FORCE)
 
 # ============================================================================
@@ -31,10 +36,15 @@ FetchContent_MakeAvailable(JUCE)
 # ============================================================================
 # Plugin: sintetizador (para que Ableton Live 12 procese MIDI)
 # ============================================================================
+# ⚠️ CAMBIOS IMPORTANTES:
+#   - PLUGIN_MANUFACTURER_CODE: exactamente 4 caracteres (era 'Hlabs' = 5)
+#   - BUNDLE_ID: sin espacios (era 'com.Harmonic Labs.MidiHarmonicHUD')
+# ============================================================================
 juce_add_plugin(MidiHarmonicHUD
     COMPANY_NAME "Harmonic Labs"
-    PLUGIN_MANUFACTURER_CODE Hlabs
-    PLUGIN_CODE Mhud
+    PLUGIN_MANUFACTURER_CODE Hlbd          # 👈 4 caracteres exactos
+    PLUGIN_CODE Mhud                       # 4 caracteres (ya estaba OK)
+    BUNDLE_ID "com.harmoniclabs.midiharmonichud"   # 👈 sin espacios
     FORMATS VST3
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
@@ -67,8 +77,6 @@ target_link_libraries(MidiHarmonicHUD PRIVATE
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
-    # ⚠️ NO usamos juce_recommended_lto_flags porque LTO con SDK moderno
-    #    puede generar referencias a símbolos que no existen en 10.13
 )
 
 # ============================================================================
@@ -90,8 +98,8 @@ endif()
 # ============================================================================
 target_compile_definitions(MidiHarmonicHUD PUBLIC
     # ---- Compatibilidad macOS 10.13 / sin Metal ----
-    JUCE_COREGRAPHICS_RENDER_WITH_METAL=0    # 🎯 Sin Metal → CoreGraphics puro
-    JUCE_COREGRAPHICS_DRAW_ASYNC=0           # Dibujo síncrono (más estable en GPUs antiguas)
+    JUCE_COREGRAPHICS_RENDER_WITH_METAL=0
+    JUCE_COREGRAPHICS_DRAW_ASYNC=0
 
     # ---- Desactivar features que no usamos ----
     JUCE_WEB_BROWSER=0
@@ -99,10 +107,10 @@ target_compile_definitions(MidiHarmonicHUD PUBLIC
     JUCE_USE_CAMERA=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 
-    # ---- Splash screen (evita dependencias de red) ----
+    # ---- Splash screen ----
     JUCE_DISPLAY_SPLASH_SCREEN=0
 
-    # ---- Habilita OpenGL opcional (por si acaso quieres usarlo luego) ----
+    # ---- OpenGL opcional ----
     JUCE_OPENGL=1
     JUCE_OPENGL_ES=0
 )
