@@ -118,7 +118,9 @@ void MidiHarmonicHUDEditor::drawGlowText (juce::Graphics& g, const juce::String&
                                           juce::Colour colour,
                                           float fontSize, float alpha)
 {
-    auto savedOpacity = g.getOpacity();
+    // ✅ ScopedSaveState guarda y restaura TODO el estado del Graphics
+    //    (incluida la opacidad) automáticamente al salir del scope.
+    juce::Graphics::ScopedSaveState state (g);
     g.setOpacity (alpha);
 
     // Sombra/glow detrás
@@ -126,11 +128,10 @@ void MidiHarmonicHUDEditor::drawGlowText (juce::Graphics& g, const juce::String&
     g.setFont (juce::Font (juce::FontOptions (fontSize + 2.0f).withStyle ("Bold")));
     g.drawText (text, area.translated (0, 1), juce::Justification::centredLeft, false);
 
+    // Texto principal
     g.setColour (colour);
     g.setFont (juce::Font (juce::FontOptions (fontSize).withStyle ("Bold")));
     g.drawText (text, area, juce::Justification::centredLeft, false);
-
-    g.setOpacity (savedOpacity);
 }
 
 //==============================================================================
@@ -159,22 +160,24 @@ void MidiHarmonicHUDEditor::drawDetectingPanel (juce::Graphics& g, juce::Rectang
 
     if (hasChord)
     {
-        // Glow detrás del acorde
-        auto savedOpacity = g.getOpacity();
-        g.setOpacity (chordFadeAlpha * 0.25f);
-        g.setColour (accentColour);
-        g.setFont (juce::Font (juce::FontOptions (48.0f).withStyle ("Bold")));
-        g.drawText (cachedChord, chordArea.translated (0, 2),
-                    juce::Justification::centred, false);
-        g.setOpacity (savedOpacity);
+        // Glow detrás del acorde (con opacidad reducida)
+        {
+            juce::Graphics::ScopedSaveState state (g);
+            g.setOpacity (chordFadeAlpha * 0.25f);
+            g.setColour (accentColour);
+            g.setFont (juce::Font (juce::FontOptions (48.0f).withStyle ("Bold")));
+            g.drawText (cachedChord, chordArea.translated (0, 2),
+                        juce::Justification::centred, false);
+        }
 
-        // Texto principal
-        auto savedOpacity2 = g.getOpacity();
-        g.setOpacity (chordFadeAlpha);
-        g.setColour (textColour);
-        g.setFont (juce::Font (juce::FontOptions (46.0f).withStyle ("Bold")));
-        g.drawText (cachedChord, chordArea, juce::Justification::centred, false);
-        g.setOpacity (savedOpacity2);
+        // Texto principal del acorde
+        {
+            juce::Graphics::ScopedSaveState state (g);
+            g.setOpacity (chordFadeAlpha);
+            g.setColour (textColour);
+            g.setFont (juce::Font (juce::FontOptions (46.0f).withStyle ("Bold")));
+            g.drawText (cachedChord, chordArea, juce::Justification::centred, false);
+        }
     }
     else
     {
@@ -335,7 +338,7 @@ void MidiHarmonicHUDEditor::drawCircleOfFifths (juce::Graphics& g, juce::Rectang
 
     // Acorde actual en el centro
     {
-        auto savedOpacity = g.getOpacity();
+        juce::Graphics::ScopedSaveState state (g);
         g.setOpacity (chordFadeAlpha);
         g.setColour (textColour);
         g.setFont (juce::Font (juce::FontOptions (18.0f).withStyle ("Bold")));
@@ -346,7 +349,6 @@ void MidiHarmonicHUDEditor::drawCircleOfFifths (juce::Graphics& g, juce::Rectang
                     juce::Rectangle<float> (centre.x - innerR, centre.y - 12.0f,
                                              innerR * 2.0f, 24.0f).toNearestInt(),
                     juce::Justification::centred, false);
-        g.setOpacity (savedOpacity);
     }
 
     // Etiquetas de pitch class alrededor
@@ -432,7 +434,8 @@ void MidiHarmonicHUDEditor::drawPianoKeyboard (juce::Graphics& g, juce::Rectangl
                                      whiteWidth, (float) keyArea.getHeight());
         key.reduce (0.75f, 0.0f);
 
-        bool active = cachedActiveNotes[n];
+        // ✅ Cast a size_t para evitar warning de signedness
+        bool active = cachedActiveNotes[static_cast<size_t> (n)];
 
         if (active)
         {
@@ -482,7 +485,8 @@ void MidiHarmonicHUDEditor::drawPianoKeyboard (juce::Graphics& g, juce::Rectangl
         float x = keyArea.getX() + whiteIndex * whiteWidth - blackWidth * 0.5f;
         juce::Rectangle<float> key (x, (float) keyArea.getY(), blackWidth, blackHeight);
 
-        bool active = cachedActiveNotes[n];
+        // ✅ Cast a size_t para evitar warning de signedness
+        bool active = cachedActiveNotes[static_cast<size_t> (n)];
 
         if (active)
         {
@@ -612,7 +616,7 @@ void MidiHarmonicHUDEditor::drawDiatonicPanel (juce::Graphics& g, juce::Rectangl
     // Fila 2: Root note
     juce::String rootStr = "---";
     if (cachedRootPC >= 0 && cachedActiveCount > 0)
-        rootStr = kPCNames[cachedRootPC];
+        rootStr = juce::String (kPCNames[cachedRootPC]);
     drawInfoRow ("Root:", rootStr,
                  cachedRootPC >= 0 ? accent2Colour : dimTextColour);
 
@@ -620,10 +624,11 @@ void MidiHarmonicHUDEditor::drawDiatonicPanel (juce::Graphics& g, juce::Rectangl
     juce::String scaleStr = "---";
     if (cachedRootPC >= 0 && cachedActiveCount > 0)
     {
-        // Relativo menor es 3 semitonos abajo
+        // ✅ FIX: envolver kPCNames en juce::String antes de concatenar
+        // Relativo menor está 3 semitonos abajo (9 arriba)
         int relMinorPC = (cachedRootPC + 9) % 12;
-        scaleStr = kPCNames[cachedRootPC] + " Major / "
-                 + kPCNames[relMinorPC] + " Minor";
+        scaleStr = juce::String (kPCNames[cachedRootPC]) + " Major / "
+                 + juce::String (kPCNames[relMinorPC]) + " Minor";
     }
     drawInfoRow ("Suggested scale:", scaleStr,
                  cachedRootPC >= 0 ? accent3Colour : dimTextColour);
@@ -662,7 +667,8 @@ void MidiHarmonicHUDEditor::timerCallback()
     for (int i = 0; i < 128; ++i)
     {
         bool on = processorRef.activeMidiNotes[i].load();
-        cachedActiveNotes[i] = on;
+        // ✅ Cast a size_t para evitar warning de signedness
+        cachedActiveNotes[static_cast<size_t> (i)] = on;
         if (on) ++count;
     }
     cachedActiveCount = count;
