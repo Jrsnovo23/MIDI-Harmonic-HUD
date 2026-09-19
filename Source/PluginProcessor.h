@@ -3,6 +3,16 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
+#include <array>
+
+//==============================================================================
+// Parámetros (IDs)
+namespace ParamIDs
+{
+    static constexpr const char* muteSynth   = "muteSynth";
+    static constexpr const char* presetIndex = "presetIndex";
+    static constexpr const char* themeIndex  = "themeIndex";
+}
 
 //==============================================================================
 class BasicSynthSound : public juce::SynthesiserSound
@@ -15,87 +25,99 @@ public:
 };
 
 //==============================================================================
+// Voz mejorada: armónicos + ADSR real + filtro paso-bajo
 class BasicSynthVoice : public juce::SynthesiserVoice
 {
 public:
-    BasicSynthVoice() = default;
+    BasicSynthVoice();
 
-    bool canPlaySound (juce::SynthesiserSound* sound) override
-    {
-        return dynamic_cast<BasicSynthSound*> (sound) != nullptr;
-    }
+    bool canPlaySound (juce::SynthesiserSound* sound) override;
 
     void startNote (int midiNoteNumber, float velocity,
-                    juce::SynthesiserSound*, int) override
-    {
-        currentAngle = 0.0;
-        level = velocity * 0.25f;
-        tailOff = 1.0f;
+                    juce::SynthesiserSound*, int currentPitchWheelPosition) override;
 
-        auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
-        auto cyclesPerSample = cyclesPerSecond / getSampleRate();
-        angleDelta = cyclesPerSample * 2.0 * juce::MathConstants<double>::pi;
-
-        attackSamples = static_cast<int> (0.01 * getSampleRate());
-        if (attackSamples <= 0) attackSamples = 1;
-        attackCounter = 0;
-        isReleasing = false;
-    }
-
-    void stopNote (float, bool allowTailOff) override
-    {
-        if (allowTailOff) { isReleasing = true; }
-        else
-        {
-            clearCurrentNote();
-            angleDelta = 0.0;
-            tailOff = 0.0;
-            isReleasing = false;
-        }
-    }
+    void stopNote (float velocity, bool allowTailOff) override;
 
     void pitchWheelMoved (int) override {}
     void controllerMoved (int, int) override {}
 
     void renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
-                          int startSample, int numSamples) override
-    {
-        if (angleDelta == 0.0) return;
+                          int startSample, int numSamples) override;
 
-        while (--numSamples >= 0)
-        {
-            float attackGain = 1.0f;
-            if (attackCounter < attackSamples)
-            {
-                attackGain = static_cast<float> (attackCounter) / static_cast<float> (attackSamples);
-                ++attackCounter;
-            }
+    void setCurrentPlaybackSampleRate (double newRate) override;
 
-            if (isReleasing) tailOff *= 0.9995f;
-
-            if (tailOff <= 0.0001f)
-            {
-                clearCurrentNote();
-                angleDelta = 0.0;
-                break;
-            }
-
-            auto s = static_cast<float> (std::sin (currentAngle) * level * attackGain * tailOff);
-            for (auto i = outputBuffer.getNumChannels(); --i >= 0;)
-                outputBuffer.addSample (i, startSample, s);
-
-            currentAngle += angleDelta;
-            ++startSample;
-        }
-    }
+    // Parámetros ajustables desde el procesador
+    void setPreset (int presetIndex);
 
 private:
-    double currentAngle = 0.0, angleDelta = 0.0;
-    float level = 0.0f, tailOff = 0.0f;
-    int attackSamples = 0, attackCounter = 0;
-    bool isReleasing = false;
+    struct PresetParams
+    {
+        float harmonic2Gain;
+        float harmonic3Gain;
+        float harmonic5Gain;
+        float attackTime;    // segundos
+        float decayTime;     // segundos
+        float sustainLevel;  // 0..1
+        float releaseTime;   // segundos
+        float filterCutoff;  // Hz base
+        float filterQ;
+        float filterEnvAmount; // 0..1
+    };
+
+    PresetParams preset;
+    int currentPreset = 0;
+
+    // Osciladores (fases)
+    double phase1 = 0.0;
+    double phase2 = 0.0;
+    double phase3 = 0.0;
+    double phase5 = 0.0;
+
+    double baseFreq = 0.0;
+    double sampleRate = 44100.0;
+    float  velocity = 0.0f;
+
+    // Envolvente ADSR
+    enum class EnvStage { Idle, Attack, Decay, Sustain, Release };
+    EnvStage envStage = EnvStage::Idle;
+    float envLevel = 0.0f;
+    float envAttackInc = 0.0f;
+    float envDecayCoef = 0.0f;
+    float envReleaseCoef = 0.0f;
+
+    // Filtro paso-bajo (State Variable Filter, un polo)
+    float filterState = 0.0f;
+    float filterEnv = 0.0f;
+    float filterCutoffHz = 2000.0f;
+    float filterQ = 0.7f;
+
+    void updateEnvelopeIncrements();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BasicSynthVoice)
+};
+
+//==============================================================================
+// Análisis de acorde con inversión
+struct ChordAnalysis
+{
+    juce::String name { "---" };
+    juce::String baseName { "---" };     // sin inversión, ej: "Cmaj"
+    juce::String inversionText {};        // ej: "/E" o "/G"
+    float confidence = 0.0f;
+    float tension = 0.0f;
+    int   rootPitchClass = -1;
+    int   bassPitchClass = -1;
+    int   inversion = 0;                  // 0=fundamental, 1=primera, 2=segunda, 3=tercera
+};
+
+//==============================================================================
+// Detección de tonalidad Krumhansl-Schmuckler
+struct KeyDetection
+{
+    juce::String name { "---" };          // ej: "C Major" o "A Minor"
+    float confidence = 0.0f;              // 0..1
+    int   tonicPitchClass = -1;           // 0..11
+    bool  isMinor = false;
 };
 
 //==============================================================================
@@ -129,40 +151,64 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     //==========================================================================
+    // APVTS
+    juce::AudioProcessorValueTreeState apvts;
+
+    //==========================================================================
     // Estado expuesto al editor
     std::atomic<bool> activeMidiNotes[128];
     std::atomic<bool> muteSynth { false };
 
     // Análisis armónico
-    std::atomic<float> chordConfidence { 0.0f };   // 0..1
-    std::atomic<float> harmonicTension { 0.0f };   // 0..1
-    std::atomic<int>   currentRootPC    { -1 };    // pitch class 0..11 o -1
+    std::atomic<float> chordConfidence { 0.0f };
+    std::atomic<float> harmonicTension { 0.0f };
+    std::atomic<int>   currentRootPC    { -1 };
+    std::atomic<int>   currentBassPC    { -1 };
+    std::atomic<int>   currentInversion { 0 };
 
-    // Historial FIFO de 4 acordes
+    // Historial de tension (buffer circular)
+    static constexpr int TENSION_HISTORY_SIZE = 256;
+    std::array<std::atomic<float>, TENSION_HISTORY_SIZE> tensionHistory;
+    std::atomic<int> tensionHistoryWritePos { 0 };
+
+    // Tonalidad detectada
+    std::atomic<int>   detectedKeyTonic { -1 };
+    std::atomic<bool>  detectedKeyIsMinor { false };
+    std::atomic<float> detectedKeyConfidence { 0.0f };
+
+    // Historial FIFO de acordes
     juce::StringArray chordHistory;
     juce::CriticalSection chordHistoryLock;
 
     juce::String currentChord { "---" };
     juce::CriticalSection currentChordLock;
 
+    juce::String currentKeyText { "---" };
+    juce::CriticalSection currentKeyLock;
+
     juce::MidiKeyboardState keyboardState;
+
+    //==========================================================================
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
     juce::Synthesiser synth;
 
-    // Estructura de análisis
-    struct ChordAnalysis
-    {
-        juce::String name { "---" };
-        float confidence = 0.0f;
-        float tension = 0.0f;
-        int   rootPitchClass = -1;
-    };
+    // Contadores de notas (para detección de tonalidad)
+    std::array<std::atomic<int>, 12> pitchClassHistogram;
+    std::atomic<uint32_t> totalNotesSeen { 0 };
+
+    // Tiempo de la última detección para decaimiento
+    std::atomic<uint32_t> lastDecayMs { 0 };
 
     void detectChordFromActiveNotes();
     ChordAnalysis analyzeChord (const std::vector<int>& notes);
+    KeyDetection detectKey();
+
     static juce::String pitchClassName (int pc);
     static juce::String noteName (int midiNote);
+
+    void decayHistogramIfNeeded();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiHarmonicHUDProcessor)
 };
