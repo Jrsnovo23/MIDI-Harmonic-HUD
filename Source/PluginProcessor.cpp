@@ -2,7 +2,6 @@
 #include "PluginEditor.h"
 
 //==============================================================================
-// Perfiles de Krumhansl-Kessler para detección de tonalidad
 namespace
 {
     constexpr float kMajorProfile[12] = { 6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f,
@@ -10,11 +9,19 @@ namespace
     constexpr float kMinorProfile[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f,
                                            2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
 
-    // Pesos de disonancia por intervalo (desde la raíz)
     constexpr float kTensionWeights[12] = {
         0.00f, 1.00f, 0.70f, 0.15f, 0.15f, 0.35f,
         0.95f, 0.10f, 0.40f, 0.30f, 0.50f, 0.75f
     };
+
+    // Comparar un set de intervalos contra un patrón de acorde
+    bool matchPattern (const std::set<int>& iv, const std::vector<int>& pat)
+    {
+        if (iv.size() != pat.size()) return false;
+        for (int i : pat)
+            if (iv.count (i) == 0) return false;
+        return true;
+    }
 }
 
 //==============================================================================
@@ -44,7 +51,7 @@ void BasicSynthVoice::setPreset (int presetIndex)
 
     switch (currentPreset)
     {
-        case 0:  // Electric Piano (default)
+        case 0:  // Electric Piano
             preset = { 0.35f, 0.15f, 0.05f,
                        0.005f, 0.4f, 0.35f, 0.5f,
                        2500.0f, 0.7f, 0.4f };
@@ -75,11 +82,9 @@ void BasicSynthVoice::updateEnvelopeIncrements()
         ? 1.0f / (float) (preset.attackTime * sampleRate)
         : 1.0f;
 
-    // Coeficiente exponencial para decay y release
     auto expCoef = [] (float timeSec, double sr) -> float
     {
         if (timeSec <= 0.0001f) return 0.0f;
-        // Factor para que llegue a ~1% del valor inicial en "timeSec"
         return std::exp (-4.6f / (float) (timeSec * sr));
     };
 
@@ -96,10 +101,8 @@ void BasicSynthVoice::startNote (int midiNoteNumber, float velocityIn,
     baseFreq = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
     velocity = velocityIn;
 
-    // Resetear fases con pequeño offset para que no suenen idénticas
     phase1 = phase2 = phase3 = phase5 = 0.0;
 
-    // Envolvente
     envStage = EnvStage::Attack;
     envLevel = 0.0f;
     filterEnv = 1.0f;
@@ -134,13 +137,11 @@ void BasicSynthVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
     const double dPhase3 = baseFreq * 3.0 * invSr;
     const double dPhase5 = baseFreq * 5.0 * invSr;
 
-    // Filtro paso-bajo de un polo (simplificado)
     const float filterBase = filterCutoffHz;
     const float filterEnvAmt = preset.filterEnvAmount;
 
     while (--numSamples >= 0)
     {
-        // --- Envolvente ---
         switch (envStage)
         {
             case EnvStage::Attack:
@@ -176,7 +177,6 @@ void BasicSynthVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
                 break;
         }
 
-        // --- Osciladores ---
         float sample = 0.0f;
         sample += (float) std::sin (phase1 * juce::MathConstants<double>::twoPi);
         sample += preset.harmonic2Gain * (float) std::sin (phase2 * juce::MathConstants<double>::twoPi);
@@ -188,14 +188,12 @@ void BasicSynthVoice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
         phase3 += dPhase3; if (phase3 >= 1.0) phase3 -= 1.0;
         phase5 += dPhase5; if (phase5 >= 1.0) phase5 -= 1.0;
 
-        // --- Filtro (un polo, cutoff modulado por env de filtro) ---
         float cutoff = filterBase * (1.0f + filterEnvAmt * (filterEnv - 0.5f) * 2.0f);
         cutoff = juce::jlimit (80.0f, (float) (sampleRate * 0.45), cutoff);
         float alpha = juce::jlimit (0.001f, 0.99f,
                                      (float) (juce::MathConstants<double>::twoPi * cutoff * invSr));
         filterState += alpha * (sample - filterState);
 
-        // Decaimiento del env de filtro
         filterEnv *= 0.99995f;
 
         float out = filterState * envLevel * velocity * 0.22f;
@@ -218,10 +216,10 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
     for (int i = 0; i < 128; ++i)
         activeMidiNotes[i].store (false);
 
-    for (int i = 0; i < 12; ++i)
+    for (size_t i = 0; i < pitchClassHistogram.size(); ++i)
         pitchClassHistogram[i].store (0);
 
-    for (int i = 0; i < TENSION_HISTORY_SIZE; ++i)
+    for (size_t i = 0; i < tensionHistory.size(); ++i)
         tensionHistory[i].store (0.0f);
 
     for (int i = 0; i < 8; ++i)
@@ -229,16 +227,10 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
 
     synth.addSound (new BasicSynthSound());
 
-    // Configurar listeners de parámetros
-    apvts.addParameterListener (ParamIDs::muteSynth, this);
-    apvts.addParameterListener (ParamIDs::presetIndex, this);
+    // ⚠️ Sin addParameterListener: usamos polling en processBlock
 }
 
-MidiHarmonicHUDProcessor::~MidiHarmonicHUDProcessor()
-{
-    apvts.removeParameterListener (ParamIDs::muteSynth, this);
-    apvts.removeParameterListener (ParamIDs::presetIndex, this);
-}
+MidiHarmonicHUDProcessor::~MidiHarmonicHUDProcessor() = default;
 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -283,15 +275,14 @@ void MidiHarmonicHUDProcessor::decayHistogramIfNeeded()
     auto now = juce::Time::getMillisecondCounter();
     auto last = lastDecayMs.load();
 
-    if (now - last < 500) return;  // Decaer cada 500ms
+    if (now - last < 500) return;
     lastDecayMs.store (now);
 
-    // Reducir el histograma en un 5% para "olvidar" notas viejas lentamente
-    for (int i = 0; i < 12; ++i)
+    for (size_t i = 0; i < pitchClassHistogram.size(); ++i)
     {
         int v = pitchClassHistogram[i].load();
         if (v > 0)
-            pitchClassHistogram[i].store ((int) (v * 0.95f));
+            pitchClassHistogram[i].store ((int) ((float) v * 0.95f));
     }
 }
 
@@ -306,7 +297,6 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Capturar eventos MIDI
     for (const auto metadata : midiMessages)
     {
         auto message = metadata.getMessage();
@@ -318,9 +308,8 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             {
                 activeMidiNotes[n].store (true);
 
-                // Actualizar histograma de pitch classes
                 int pc = n % 12;
-                pitchClassHistogram[pc].fetch_add (1);
+                pitchClassHistogram[static_cast<size_t> (pc)].fetch_add (1);
                 totalNotesSeen.fetch_add (1);
             }
         }
@@ -337,15 +326,12 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Análisis armónico
     decayHistogramIfNeeded();
     detectChordFromActiveNotes();
 
-    // Sincronizar mute con APVTS
     bool muteParam = apvts.getRawParameterValue (ParamIDs::muteSynth)->load() > 0.5f;
     muteSynth.store (muteParam);
 
-    // Sincronizar preset con las voces
     int preset = (int) apvts.getRawParameterValue (ParamIDs::presetIndex)->load();
     for (int i = 0; i < synth.getNumVoices(); ++i)
     {
@@ -353,7 +339,6 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             v->setPreset (preset);
     }
 
-    // Render de audio
     if (!muteSynth.load())
     {
         synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
@@ -409,9 +394,8 @@ void MidiHarmonicHUDProcessor::detectChordFromActiveNotes()
     detectedKeyIsMinor.store (key.isMinor);
     detectedKeyConfidence.store (key.confidence);
 
-    // Escribir en el buffer circular de tensión
     int pos = tensionHistoryWritePos.load();
-    tensionHistory[pos].store (analysis.tension);
+    tensionHistory[static_cast<size_t> (pos)].store (analysis.tension);
     tensionHistoryWritePos.store ((pos + 1) % TENSION_HISTORY_SIZE);
 }
 
@@ -438,7 +422,6 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
     std::vector<int> sorted = notes;
     std::sort (sorted.begin(), sorted.end());
 
-    // Nota más grave = bajo (para inversiones)
     int bassMidiNote = sorted[0];
     result.bassPitchClass = bassMidiNote % 12;
 
@@ -448,12 +431,11 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
     int root = bassMidiNote % 12;
     result.rootPitchClass = root;
 
-    // Calcular intervalos respecto a la nota más grave
     std::set<int> intervals;
     for (int pc : pcSet)
         intervals.insert ((pc - root + 12) % 12);
 
-    // --- Tensión armónica ---
+    // --- Tensión ---
     float tensionSum = 0.0f;
     int   tensionCount = 0;
     for (int i : intervals)
@@ -463,10 +445,9 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         ++tensionCount;
     }
     result.tension = (tensionCount > 0)
-        ? juce::jlimit (0.0f, 1.0f, (tensionSum / tensionCount) * 1.4f)
+        ? juce::jlimit (0.0f, 1.0f, (tensionSum / (float) tensionCount) * 1.4f)
         : 0.0f;
 
-    // --- Nota única ---
     if (notes.size() == 1)
     {
         result.name = noteName (sorted[0]);
@@ -475,15 +456,13 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         return result;
     }
 
-    // --- Detección de acorde (permitiendo inversiones) ---
-    // Buscamos la raíz que mejor se ajuste al conjunto de pitch classes
-    auto matchesPattern = [] (const std::set<int>& iv, std::initializer_list<int> pat)
+    // --- Patrones ---
+    struct ChordPattern
     {
-        return iv == std::set<int> (pat.begin(), pat.end());
+        std::vector<int> intervals;
+        const char* suffix;
     };
 
-    // Estructura de patrón: (intervalos, sufijo)
-    struct ChordPattern { std::vector<int> intervals; const char* suffix; };
     static const std::vector<ChordPattern> patterns = {
         {{0, 4, 7},        "maj"},
         {{0, 3, 7},        "min"},
@@ -507,7 +486,6 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         {{0, 2, 7, 10},    "7sus2"}
     };
 
-    // Probar cada nota del conjunto como posible raíz
     int bestRoot = -1;
     const ChordPattern* bestPattern = nullptr;
 
@@ -519,17 +497,14 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
 
         for (const auto& p : patterns)
         {
-            if (matchesPattern (tryIntervals,
-                                 std::initializer_list<int> (p.intervals.begin(),
-                                                              p.intervals.end())))
+            if (matchPattern (tryIntervals, p.intervals))
             {
-                // Preferir la raíz que sea la nota más grave (evita falsos positivos)
                 if (bestRoot < 0 || tryRoot == root)
                 {
                     bestRoot = tryRoot;
                     bestPattern = &p;
 
-                    if (tryRoot == root) break;  // Perfecto match: paramos
+                    if (tryRoot == root) break;
                 }
             }
         }
@@ -542,8 +517,6 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         result.rootPitchClass = bestRoot;
         result.baseName = pitchClassName (bestRoot) + bestPattern->suffix;
 
-        // --- Detección de inversión ---
-        // Calcular la posición del bajo respecto a la raíz en el acorde
         int bassInterval = (result.bassPitchClass - bestRoot + 12) % 12;
 
         if (bassInterval == 0)
@@ -553,14 +526,12 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         }
         else
         {
-            // Determinar qué grado del acorde es el bajo
-            // 4 = tercera mayor, 3 = tercera menor, 7 = quinta, etc.
             if (bassInterval == 3 || bassInterval == 4)
-                result.inversion = 1;   // Primera inversión
+                result.inversion = 1;
             else if (bassInterval == 7)
-                result.inversion = 2;   // Segunda inversión
+                result.inversion = 2;
             else
-                result.inversion = 3;   // Otra (séptima, etc.)
+                result.inversion = 3;
 
             result.inversionText = "/" + pitchClassName (result.bassPitchClass);
             result.name = result.baseName + result.inversionText;
@@ -570,7 +541,6 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         return result;
     }
 
-    // --- Fallback: no coincide ---
     juce::String fallback;
     for (size_t i = 0; i < sorted.size(); ++i)
     {
@@ -588,14 +558,12 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
 {
     KeyDetection result;
 
-    // Si no hay suficientes notas, devolvemos "---"
     if (totalNotesSeen.load() < 3)
         return result;
 
-    // Construir el vector de observaciones normalizado
     std::array<float, 12> obs {};
     float total = 0.0f;
-    for (int i = 0; i < 12; ++i)
+    for (size_t i = 0; i < obs.size(); ++i)
     {
         obs[i] = (float) pitchClassHistogram[i].load();
         total += obs[i];
@@ -603,18 +571,21 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
 
     if (total < 1.0f) return result;
 
-    for (int i = 0; i < 12; ++i)
+    for (size_t i = 0; i < obs.size(); ++i)
         obs[i] /= total;
 
-    // Correlación de Pearson con cada perfil
     auto correlate = [] (const std::array<float, 12>& a, const float* b) -> float
     {
         float meanA = 0.0f, meanB = 0.0f;
-        for (int i = 0; i < 12; ++i) { meanA += a[i]; meanB += b[i]; }
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            meanA += a[i];
+            meanB += b[i];
+        }
         meanA /= 12.0f; meanB /= 12.0f;
 
         float num = 0.0f, denA = 0.0f, denB = 0.0f;
-        for (int i = 0; i < 12; ++i)
+        for (size_t i = 0; i < a.size(); ++i)
         {
             float da = a[i] - meanA;
             float db = b[i] - meanB;
@@ -627,18 +598,16 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
         return (den > 0.0001f) ? (num / den) : 0.0f;
     };
 
-    // Probar 12 tonos mayores y 12 menores
     float bestScore = -2.0f;
     int bestTonic = 0;
     bool bestIsMinor = false;
 
     for (int tonic = 0; tonic < 12; ++tonic)
     {
-        // Rotar el perfil para este tónico
         std::array<float, 12> majorRot {}, minorRot {};
-        for (int i = 0; i < 12; ++i)
+        for (size_t i = 0; i < 12; ++i)
         {
-            int idx = (i - tonic + 12) % 12;
+            int idx = ((int) i - tonic + 12) % 12;
             majorRot[i] = kMajorProfile[idx];
             minorRot[i] = kMinorProfile[idx];
         }
@@ -659,12 +628,6 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
 }
 
 //==============================================================================
-// APVTS parameter listener (implementado via lambda o clase)
-//==============================================================================
-//==============================================================================
-// Nota: este processor no hereda de AudioProcessorValueTreeState::Listener
-// por simplicidad. Usamos polling en processBlock.
-
 juce::AudioProcessorEditor* MidiHarmonicHUDProcessor::createEditor()
 {
     return new MidiHarmonicHUDEditor (*this);
