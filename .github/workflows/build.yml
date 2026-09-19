@@ -39,13 +39,13 @@ permissions:
 jobs:
   build-macos:
     name: Build VST3 (Intel x86_64 · macOS 10.13 target)
-    # ✅ macos-15-intel = runner Intel x86_64 GRATUITO con Xcode 16.
-    #    Reemplaza a macos-13 (eliminado por GitHub a finales de 2024).
     runs-on: macos-15-intel
 
     env:
       BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
-      VST3_NAME: "MIDI Harmonic HUD.vst3"
+      # Nombre "bonito" que queremos en el ZIP final (con espacios, como lo ve Ableton)
+      VST3_FRIENDLY_NAME: "MIDI Harmonic HUD.vst3"
+      # Directorio base donde CMake coloca los artefactos
       VST3_DIR: "build/MidiHarmonicHUD_artefacts/${{ github.event.inputs.build_type || 'Release' }}/VST3"
 
     steps:
@@ -70,9 +70,6 @@ jobs:
           xcode-select -p
           clang --version
           echo ""
-          echo "=== SDK disponibles ==="
-          xcodebuild -showsdks || true
-          echo ""
           echo "=== CMake / Ninja ==="
           cmake --version
           ninja --version
@@ -92,62 +89,93 @@ jobs:
       - name: 🔨 Compilar VST3
         run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
-      - name: ✅ Verificar el bundle VST3
+      - name: 🔎 Detectar el bundle VST3 generado
+        id: detect_vst3
         run: |
-          VST3_PATH="${{ env.VST3_DIR }}/${{ env.VST3_NAME }}"
+          echo "=== Buscando bundles .vst3 en el directorio de artefactos ==="
+          find build/MidiHarmonicHUD_artefacts -name "*.vst3" -type d -print
 
-          if [ ! -d "$VST3_PATH" ]; then
-            echo "❌ ERROR: No se encontró el bundle VST3 en $VST3_PATH"
-            find build -name "*.vst3" -type d
+          echo ""
+          echo "=== Detección dinámica del bundle ==="
+          # Buscar el primer .vst3 dentro del directorio de artefactos
+          VST3_PATH=$(find build/MidiHarmonicHUD_artefacts -name "*.vst3" -type d -print -quit)
+
+          if [ -z "$VST3_PATH" ]; then
+            echo "❌ ERROR: No se encontró ningún bundle .vst3 en build/MidiHarmonicHUD_artefacts"
+            echo "Estructura del directorio de artefactos:"
+            find build/MidiHarmonicHUD_artefacts -type d
             exit 1
           fi
 
-          echo "✅ Bundle VST3 encontrado: $VST3_PATH"
-          echo ""
+          echo "✅ Bundle detectado: $VST3_PATH"
+          echo "vst3_path=$VST3_PATH" >> $GITHUB_OUTPUT
+
+      - name: ✅ Verificar el bundle VST3
+        run: |
+          VST3_PATH="${{ steps.detect_vst3.outputs.vst3_path }}"
+          VST3_BINARY="$VST3_PATH/Contents/MacOS/$(basename "$VST3_PATH" .vst3)"
+
           echo "=== Arquitecturas del binario (debe ser solo x86_64) ==="
-          file "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD"
+          file "$VST3_BINARY"
           echo ""
 
           echo "=== Verificación de arquitecturas con lipo ==="
-          lipo -info "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD"
+          lipo -info "$VST3_BINARY"
           echo ""
 
           echo "=== Verificar que NO contiene arm64 ==="
-          if lipo -info "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" | grep -q "arm64"; then
+          if lipo -info "$VST3_BINARY" | grep -q "arm64"; then
             echo "❌ ERROR: El binario contiene arm64, debería ser solo x86_64"
             exit 1
           fi
           echo "✅ Confirmado: binario solo x86_64"
 
           echo ""
-          echo "=== Deployment target mínimo ==="
-          otool -l "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
+          echo "=== Deployment target mínimo (debe ser 10.13) ==="
+          otool -l "$VST3_BINARY" \
             | grep -A4 LC_VERSION_MIN_MACOSX | head -6 || true
           echo ""
 
           echo "=== Símbolos de libc++ (verificar que no haya referencias modernas) ==="
-          nm -u "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
+          nm -u "$VST3_BINARY" \
             | grep -i "c++" | head -20 || echo "(sin símbolos libc++ problemáticos)"
 
           echo ""
           echo "=== Contenido del bundle ==="
           find "$VST3_PATH" -type f
 
-      - name: 📦 Empaquetar VST3 como ZIP
+      - name: 📦 Empaquetar VST3 como ZIP (con nombre amigable)
         if: ${{ github.event.inputs.create_release_artifact != 'false' }}
         run: |
-          cd "${{ env.VST3_DIR }}"
-          zip -r -y "MidiHarmonicHUD-VST3-x86_64.zip" "${{ env.VST3_NAME }}"
+          VST3_PATH="${{ steps.detect_vst3.outputs.vst3_path }}"
+          VST3_BASENAME=$(basename "$VST3_PATH")
+
+          echo "=== Renombrando bundle para el ZIP ==="
+          echo "Nombre original: $VST3_BASENAME"
+          echo "Nombre en el ZIP: $VST3_FRIENDLY_NAME"
+
+          # Crear carpeta temporal de empaquetado
+          mkdir -p /tmp/package
+          cp -R "$VST3_PATH" "/tmp/package/$VST3_FRIENDLY_NAME"
+
+          # Crear el ZIP desde la carpeta temporal
+          cd /tmp/package
+          zip -r -y "MidiHarmonicHUD-VST3-x86_64.zip" "$VST3_FRIENDLY_NAME"
+
+          # Mover el ZIP a un lugar accesible
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          mv "MidiHarmonicHUD-VST3-x86_64.zip" "$GITHUB_WORKSPACE/artifacts/"
+
           echo ""
           echo "=== Contenido del ZIP ==="
-          unzip -l "MidiHarmonicHUD-VST3-x86_64.zip"
+          unzip -l "$GITHUB_WORKSPACE/artifacts/MidiHarmonicHUD-VST3-x86_64.zip"
 
       - name: ⬆️ Subir artefacto
         if: ${{ github.event.inputs.create_release_artifact != 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: MidiHarmonicHUD-VST3-${{ env.BUILD_TYPE }}-x86_64-${{ github.sha }}
-          path: ${{ env.VST3_DIR }}/MidiHarmonicHUD-VST3-x86_64.zip
+          path: artifacts/MidiHarmonicHUD-VST3-x86_64.zip
           retention-days: 30
           if-no-files-found: error
 
