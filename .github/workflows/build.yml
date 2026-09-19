@@ -39,9 +39,9 @@ permissions:
 jobs:
   build-macos:
     name: Build VST3 (Intel x86_64 · macOS 10.13 target)
-    # ⚠️ CRÍTICO: macos-13 es el ÚLTIMO runner Intel de GitHub Actions.
-    #    NO usar macos-latest (actualmente macos-14 = Apple Silicon arm64).
-    runs-on: macos-13
+    # ✅ macos-15-intel = runner Intel x86_64 GRATUITO con Xcode 16.
+    #    Reemplaza a macos-13 (eliminado por GitHub a finales de 2024).
+    runs-on: macos-15-intel
 
     env:
       BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
@@ -63,9 +63,8 @@ jobs:
           uname -a
           sw_vers
           echo ""
-          echo "=== Arquitectura del runner ==="
+          echo "=== Arquitectura del runner (debe ser x86_64) ==="
           arch
-          echo "Esperado: i386 (equivalente a x86_64 en macOS)"
           echo ""
           echo "=== Xcode / CLT ==="
           xcode-select -p
@@ -125,6 +124,7 @@ jobs:
           otool -l "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
             | grep -A4 LC_VERSION_MIN_MACOSX | head -6 || true
           echo ""
+
           echo "=== Símbolos de libc++ (verificar que no haya referencias modernas) ==="
           nm -u "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
             | grep -i "c++" | head -20 || echo "(sin símbolos libc++ problemáticos)"
@@ -158,7 +158,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parámetro | Valor |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Runner | macOS 13 (Intel) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | macOS 15 Intel (x86_64) |" >> $GITHUB_STEP_SUMMARY
           echo "| Build type | ${{ env.BUILD_TYPE }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Arquitectura | **x86_64 (Intel only)** |" >> $GITHUB_STEP_SUMMARY
           echo "| Deployment target | **macOS 10.13 (High Sierra)** |" >> $GITHUB_STEP_SUMMARY
