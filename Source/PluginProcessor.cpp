@@ -6,39 +6,29 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
     : AudioProcessor (BusesProperties()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
-    // Inicializar todas las notas como inactivas
     for (int i = 0; i < 128; ++i)
         activeMidiNotes[i].store (false);
 
-    // Añadir 8 voces de polifonía
     for (int i = 0; i < 8; ++i)
         synth.addVoice (new BasicSynthVoice());
 
-    // Añadir el sonido
     synth.addSound (new BasicSynthSound());
 }
 
 MidiHarmonicHUDProcessor::~MidiHarmonicHUDProcessor() = default;
 
 //==============================================================================
-void MidiHarmonicHUDProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
+void MidiHarmonicHUDProcessor::prepareToPlay (double sampleRate, int)
 {
     synth.setCurrentPlaybackSampleRate (sampleRate);
     keyboardState.reset();
 }
 
-void MidiHarmonicHUDProcessor::releaseResources()
-{
-    keyboardState.reset();
-}
+void MidiHarmonicHUDProcessor::releaseResources() { keyboardState.reset(); }
 
 bool MidiHarmonicHUDProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    // Solo aceptamos salida estéreo
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-
-    return true;
+    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
 //==============================================================================
@@ -49,26 +39,25 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // Limpiar canales de entrada no usados (por si acaso)
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Procesar eventos MIDI entrantes
+    // Capturar eventos MIDI
     for (const auto metadata : midiMessages)
     {
         auto message = metadata.getMessage();
 
         if (message.isNoteOn())
         {
-            int noteNumber = message.getNoteNumber();
-            if (noteNumber >= 0 && noteNumber < 128)
-                activeMidiNotes[noteNumber].store (true);
+            int n = message.getNoteNumber();
+            if (juce::isPositiveAndBelow (n, 128))
+                activeMidiNotes[n].store (true);
         }
         else if (message.isNoteOff())
         {
-            int noteNumber = message.getNoteNumber();
-            if (noteNumber >= 0 && noteNumber < 128)
-                activeMidiNotes[noteNumber].store (false);
+            int n = message.getNoteNumber();
+            if (juce::isPositiveAndBelow (n, 128))
+                activeMidiNotes[n].store (false);
         }
         else if (message.isAllNotesOff() || message.isAllSoundOff())
         {
@@ -77,24 +66,18 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Detectar acorde actual a partir de las notas activas
+    // Análisis armónico (siempre activo)
     detectChordFromActiveNotes();
 
-    // Renderizar audio del sintetizador (si no está muteado)
+    // Render de audio
     if (!muteSynth.load())
     {
         synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
     }
     else
     {
-        // Silenciar el buffer de audio sin interrumpir la detección MIDI
         buffer.clear();
-        // Aun así, debemos procesar el MIDI para que el synth no se desincronice
-        // pero sin generar audio. Una forma segura es llamar a renderNextBlock
-        // en un buffer temporal y descartarlo, o simplemente no llamarlo.
-        // Como no llamamos a renderNextBlock, las voces no avanzan, pero al
-        // desmutear, el estado del synth podría estar desfasado. Para evitar
-        // problemas, procesamos el MIDI en un buffer temporal.
+        // Procesar MIDI en buffer temporal para mantener el synth sincronizado
         juce::AudioBuffer<float> tempBuffer (buffer.getNumChannels(), buffer.getNumSamples());
         tempBuffer.clear();
         synth.renderNextBlock (tempBuffer, midiMessages, 0, tempBuffer.getNumSamples());
@@ -105,115 +88,165 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 void MidiHarmonicHUDProcessor::detectChordFromActiveNotes()
 {
     std::vector<int> notes;
+    notes.reserve (16);
     for (int i = 0; i < 128; ++i)
-    {
         if (activeMidiNotes[i].load())
             notes.push_back (i);
-    }
 
-    juce::String detected;
-
-    if (notes.empty())
-    {
-        detected = "---";
-    }
-    else if (notes.size() == 1)
-    {
-        detected = noteName (notes[0]);
-    }
-    else
-    {
-        detected = identifyChord (notes);
-    }
+    auto analysis = analyzeChord (notes);
 
     {
         const juce::ScopedLock sl (currentChordLock);
-        if (currentChord != detected)
+        if (currentChord != analysis.name)
         {
-            currentChord = detected;
-
-            if (detected != "---")
+            currentChord = analysis.name;
+            if (analysis.name != "---")
             {
                 const juce::ScopedLock histLock (chordHistoryLock);
-                chordHistory.insert (0, detected);
+                chordHistory.insert (0, analysis.name);
                 if (chordHistory.size() > 4)
                     chordHistory.remove (chordHistory.size() - 1);
             }
         }
     }
+
+    chordConfidence.store (analysis.confidence);
+    harmonicTension.store (analysis.tension);
+    currentRootPC.store (analysis.rootPitchClass);
 }
 
 //==============================================================================
-juce::String MidiHarmonicHUDProcessor::noteName (int midiNote)
+juce::String MidiHarmonicHUDProcessor::pitchClassName (int pc)
 {
     static const char* names[] = { "C", "C#", "D", "D#", "E", "F",
                                    "F#", "G", "G#", "A", "A#", "B" };
+    return names[((pc % 12) + 12) % 12];
+}
+
+juce::String MidiHarmonicHUDProcessor::noteName (int midiNote)
+{
     int octave = (midiNote / 12) - 1;
-    int pitchClass = midiNote % 12;
-    return juce::String (names[pitchClass]) + juce::String (octave);
+    return pitchClassName (midiNote) + juce::String (octave);
 }
 
 //==============================================================================
-juce::String MidiHarmonicHUDProcessor::identifyChord (const std::vector<int>& notes)
+MidiHarmonicHUDProcessor::ChordAnalysis
+MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& notes)
 {
-    // Ordenar las notas
+    ChordAnalysis result;
+
+    if (notes.empty())
+        return result;
+
     std::vector<int> sorted = notes;
     std::sort (sorted.begin(), sorted.end());
 
-    // Obtener las clases de altura (pitch classes) sin duplicados
-    std::set<int> pitchClassSet;
-    for (int n : sorted)
-        pitchClassSet.insert (n % 12);
+    std::set<int> pcSet;
+    for (int n : sorted) pcSet.insert (n % 12);
 
-    std::vector<int> pcs (pitchClassSet.begin(), pitchClassSet.end());
-
-    // Si todas las notas están en un intervalo de octava, tratamos como acorde
-    // Simplificación: usamos la raíz como la nota más grave
     int root = sorted[0] % 12;
+    result.rootPitchClass = root;
 
-    // Normalizar intervalos respecto a la raíz
     std::set<int> intervals;
-    for (int pc : pcs)
+    for (int pc : pcSet)
+        intervals.insert ((pc - root + 12) % 12);
+
+    // === Cálculo de tensión armónica ===
+    // Pesos de disonancia por intervalo (0 = unísono, 6 = tritono)
+    static const float tensionWeights[12] = {
+        0.00f, // 0 unísono
+        1.00f, // 1 m2
+        0.70f, // 2 M2
+        0.15f, // 3 m3
+        0.15f, // 4 M3
+        0.35f, // 5 P4
+        0.95f, // 6 tritono
+        0.10f, // 7 P5
+        0.40f, // 8 m6
+        0.30f, // 9 M6
+        0.50f, // 10 m7
+        0.75f  // 11 M7
+    };
+
+    float tensionSum = 0.0f;
+    int   tensionCount = 0;
+    for (int i : intervals)
     {
-        int interval = (pc - root + 12) % 12;
-        intervals.insert (interval);
+        if (i == 0) continue;
+        tensionSum += tensionWeights[i];
+        ++tensionCount;
+    }
+    result.tension = (tensionCount > 0)
+        ? juce::jlimit (0.0f, 1.0f, (tensionSum / tensionCount) * 1.4f)
+        : 0.0f;
+
+    // === Nota única ===
+    if (notes.size() == 1)
+    {
+        result.name = noteName (sorted[0]);
+        result.confidence = 0.45f;
+        return result;
     }
 
-    // Patrones comunes de acordes (intervalos desde la raíz)
+    // === Emparejamiento con patrones ===
+    auto matches = [&] (std::initializer_list<int> pat)
+    {
+        return intervals == std::set<int> (pat.begin(), pat.end());
+    };
+
+    auto rootStr = [&]() { return pitchClassName (root); };
+
+    struct Match { bool hit; const char* suffix; };
+    auto tryMatch = [&] (std::initializer_list<int> pat, const char* suffix) -> bool
+    {
+        if (matches (pat))
+        {
+            result.name = rootStr() + suffix;
+            result.confidence = 1.0f;
+            return true;
+        }
+        return false;
+    };
+
     // Tríadas
-    if (intervals == std::set<int>{0, 4, 7}) return noteName (root) + "maj";
-    if (intervals == std::set<int>{0, 3, 7}) return noteName (root) + "min";
-    if (intervals == std::set<int>{0, 3, 6}) return noteName (root) + "dim";
-    if (intervals == std::set<int>{0, 4, 8}) return noteName (root) + "aug";
+    if (tryMatch ({0, 4, 7}, "maj")) return result;
+    if (tryMatch ({0, 3, 7}, "min")) return result;
+    if (tryMatch ({0, 3, 6}, "dim")) return result;
+    if (tryMatch ({0, 4, 8}, "aug")) return result;
+    if (tryMatch ({0, 2, 7}, "sus2")) return result;
+    if (tryMatch ({0, 5, 7}, "sus4")) return result;
 
     // Séptimas
-    if (intervals == std::set<int>{0, 4, 7, 11}) return noteName (root) + "maj7";
-    if (intervals == std::set<int>{0, 4, 7, 10}) return noteName (root) + "7";
-    if (intervals == std::set<int>{0, 3, 7, 10}) return noteName (root) + "m7";
-    if (intervals == std::set<int>{0, 3, 7, 11}) return noteName (root) + "mMaj7";
-    if (intervals == std::set<int>{0, 3, 6, 10}) return noteName (root) + "m7b5";
-    if (intervals == std::set<int>{0, 3, 6, 9}) return noteName (root) + "dim7";
-
-    // Suspendidos
-    if (intervals == std::set<int>{0, 2, 7}) return noteName (root) + "sus2";
-    if (intervals == std::set<int>{0, 5, 7}) return noteName (root) + "sus4";
+    if (tryMatch ({0, 4, 7, 11}, "maj7")) return result;
+    if (tryMatch ({0, 4, 7, 10}, "7"))    return result;
+    if (tryMatch ({0, 3, 7, 10}, "m7"))   return result;
+    if (tryMatch ({0, 3, 7, 11}, "mMaj7"))return result;
+    if (tryMatch ({0, 3, 6, 10}, "m7b5")) return result;
+    if (tryMatch ({0, 3, 6, 9},  "dim7")) return result;
+    if (tryMatch ({0, 4, 8, 11}, "aug7")) return result;
 
     // Sextas
-    if (intervals == std::set<int>{0, 4, 7, 9}) return noteName (root) + "6";
-    if (intervals == std::set<int>{0, 3, 7, 9}) return noteName (root) + "m6";
+    if (tryMatch ({0, 4, 7, 9}, "6"))  return result;
+    if (tryMatch ({0, 3, 7, 9}, "m6")) return result;
 
     // Novenas
-    if (intervals == std::set<int>{0, 4, 7, 10, 2}) return noteName (root) + "9";
-    if (intervals == std::set<int>{0, 3, 7, 10, 2}) return noteName (root) + "m9";
-    if (intervals == std::set<int>{0, 4, 7, 11, 2}) return noteName (root) + "maj9";
+    if (tryMatch ({0, 4, 7, 10, 2}, "9"))    return result;
+    if (tryMatch ({0, 3, 7, 10, 2}, "m9"))   return result;
+    if (tryMatch ({0, 4, 7, 11, 2}, "maj9")) return result;
 
-    // Si no coincide, devolver las notas individuales
-    juce::String result;
+    // Séptimas suspendidas
+    if (tryMatch ({0, 5, 7, 10}, "7sus4")) return result;
+    if (tryMatch ({0, 2, 7, 10}, "7sus2")) return result;
+
+    // No coincide: mostrar notas individuales
+    juce::String fallback;
     for (size_t i = 0; i < sorted.size(); ++i)
     {
-        if (i > 0) result += " ";
-        result += noteName (sorted[i]);
+        if (i > 0) fallback += " ";
+        fallback += noteName (sorted[i]);
     }
+    result.name = fallback;
+    result.confidence = 0.35f;
     return result;
 }
 
@@ -225,33 +258,22 @@ juce::AudioProcessorEditor* MidiHarmonicHUDProcessor::createEditor()
 
 bool MidiHarmonicHUDProcessor::hasEditor() const { return true; }
 
-//==============================================================================
 const juce::String MidiHarmonicHUDProcessor::getName() const { return "MIDI Harmonic HUD"; }
 bool MidiHarmonicHUDProcessor::acceptsMidi() const { return true; }
 bool MidiHarmonicHUDProcessor::producesMidi() const { return false; }
 bool MidiHarmonicHUDProcessor::isMidiEffect() const { return false; }
 double MidiHarmonicHUDProcessor::getTailLengthSeconds() const { return 2.0; }
 
-//==============================================================================
 int MidiHarmonicHUDProcessor::getNumPrograms() { return 1; }
 int MidiHarmonicHUDProcessor::getCurrentProgram() { return 0; }
-void MidiHarmonicHUDProcessor::setCurrentProgram (int /*index*/) {}
-const juce::String MidiHarmonicHUDProcessor::getProgramName (int /*index*/) { return {}; }
-void MidiHarmonicHUDProcessor::changeProgramName (int /*index*/, const juce::String& /*newName*/) {}
+void MidiHarmonicHUDProcessor::setCurrentProgram (int) {}
+const juce::String MidiHarmonicHUDProcessor::getProgramName (int) { return {}; }
+void MidiHarmonicHUDProcessor::changeProgramName (int, const juce::String&) {}
+
+void MidiHarmonicHUDProcessor::getStateInformation (juce::MemoryBlock&) {}
+void MidiHarmonicHUDProcessor::setStateInformation (const void*, int) {}
 
 //==============================================================================
-void MidiHarmonicHUDProcessor::getStateInformation (juce::MemoryBlock& /*destData*/)
-{
-    // No hay parámetros persistentes por ahora
-}
-
-void MidiHarmonicHUDProcessor::setStateInformation (const void* /*data*/, int /*sizeInBytes*/)
-{
-    // No hay parámetros persistentes por ahora
-}
-
-//==============================================================================
-// Creación del plugin
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new MidiHarmonicHUDProcessor();
