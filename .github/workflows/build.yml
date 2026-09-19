@@ -4,7 +4,6 @@ name: Build MIDI Harmonic HUD VST3
 # TRIGGERS
 # ============================================================================
 on:
-  # 1) Compilación automática al hacer push a main o master
   push:
     branches: [ main, master ]
     paths-ignore:
@@ -12,11 +11,9 @@ on:
       - 'LICENSE'
       - '.gitignore'
 
-  # 2) Compilación automática en Pull Requests hacia main o master
   pull_request:
     branches: [ main, master ]
 
-  # 3) Compilación MANUAL desde la pestaña "Actions" → "Run workflow"
   workflow_dispatch:
     inputs:
       build_type:
@@ -33,9 +30,6 @@ on:
         default: true
         type: boolean
 
-# ============================================================================
-# PERMISOS
-# ============================================================================
 permissions:
   contents: read
 
@@ -44,96 +38,119 @@ permissions:
 # ============================================================================
 jobs:
   build-macos:
-    name: Build VST3 (macOS Universal)
-    runs-on: macos-latest
+    name: Build VST3 (Intel x86_64 · macOS 10.13 target)
+    # ⚠️ CRÍTICO: macos-13 es el ÚLTIMO runner Intel de GitHub Actions.
+    #    NO usar macos-latest (actualmente macos-14 = Apple Silicon arm64).
+    runs-on: macos-13
 
-    # Variables de entorno compartidas
     env:
-      # Tipo de build: usa el input manual si existe, si no, Release
       BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
-      # Ruta esperada del bundle VST3
       VST3_NAME: "MIDI Harmonic HUD.vst3"
       VST3_DIR: "build/MidiHarmonicHUD_artefacts/${{ github.event.inputs.build_type || 'Release' }}/VST3"
 
     steps:
-      # ---------------------------------------------------------------
       - name: 📥 Checkout del código
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ---------------------------------------------------------------
       - name: 🛠️ Instalar Ninja
         run: brew install ninja
 
-      # ---------------------------------------------------------------
-      - name: 🔍 Verificar toolchain
+      - name: 🔍 Verificar toolchain y arquitectura del runner
         run: |
-          echo "=== Xcode / CLT version ==="
+          echo "=== Runner info ==="
+          uname -a
+          sw_vers
+          echo ""
+          echo "=== Arquitectura del runner ==="
+          arch
+          echo "Esperado: i386 (equivalente a x86_64 en macOS)"
+          echo ""
+          echo "=== Xcode / CLT ==="
           xcode-select -p
           clang --version
+          echo ""
+          echo "=== SDK disponibles ==="
+          xcodebuild -showsdks || true
           echo ""
           echo "=== CMake / Ninja ==="
           cmake --version
           ninja --version
           echo ""
-          echo "=== Arquitecturas destino ==="
-          echo "x86_64;arm64 (Universal Binary)"
-          echo "Deployment target: macOS 10.13"
+          echo "=== Target de compilación ==="
+          echo "  Arquitectura:   x86_64 (Intel only)"
+          echo "  Deployment:     macOS 10.13 (High Sierra)"
+          echo "  Render backend: CoreGraphics (Metal DESACTIVADO)"
 
-      # ---------------------------------------------------------------
       - name: ⚙️ Configurar CMake
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13"
 
-      # ---------------------------------------------------------------
       - name: 🔨 Compilar VST3
         run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
-      # ---------------------------------------------------------------
       - name: ✅ Verificar el bundle VST3
         run: |
           VST3_PATH="${{ env.VST3_DIR }}/${{ env.VST3_NAME }}"
 
           if [ ! -d "$VST3_PATH" ]; then
             echo "❌ ERROR: No se encontró el bundle VST3 en $VST3_PATH"
-            echo "Buscando cualquier .vst3 en el directorio build..."
             find build -name "*.vst3" -type d
             exit 1
           fi
 
           echo "✅ Bundle VST3 encontrado: $VST3_PATH"
           echo ""
-          echo "=== Arquitecturas del binario ==="
+          echo "=== Arquitecturas del binario (debe ser solo x86_64) ==="
           file "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD"
+          echo ""
+
+          echo "=== Verificación de arquitecturas con lipo ==="
+          lipo -info "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD"
+          echo ""
+
+          echo "=== Verificar que NO contiene arm64 ==="
+          if lipo -info "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" | grep -q "arm64"; then
+            echo "❌ ERROR: El binario contiene arm64, debería ser solo x86_64"
+            exit 1
+          fi
+          echo "✅ Confirmado: binario solo x86_64"
+
+          echo ""
+          echo "=== Deployment target mínimo ==="
+          otool -l "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
+            | grep -A4 LC_VERSION_MIN_MACOSX | head -6 || true
+          echo ""
+          echo "=== Símbolos de libc++ (verificar que no haya referencias modernas) ==="
+          nm -u "$VST3_PATH/Contents/MacOS/MIDI Harmonic HUD" \
+            | grep -i "c++" | head -20 || echo "(sin símbolos libc++ problemáticos)"
+
           echo ""
           echo "=== Contenido del bundle ==="
           find "$VST3_PATH" -type f
 
-      # ---------------------------------------------------------------
       - name: 📦 Empaquetar VST3 como ZIP
         if: ${{ github.event.inputs.create_release_artifact != 'false' }}
         run: |
           cd "${{ env.VST3_DIR }}"
-          zip -r -y "MidiHarmonicHUD-VST3.zip" "${{ env.VST3_NAME }}"
+          zip -r -y "MidiHarmonicHUD-VST3-x86_64.zip" "${{ env.VST3_NAME }}"
           echo ""
           echo "=== Contenido del ZIP ==="
-          unzip -l "MidiHarmonicHUD-VST3.zip"
+          unzip -l "MidiHarmonicHUD-VST3-x86_64.zip"
 
-      # ---------------------------------------------------------------
       - name: ⬆️ Subir artefacto
         if: ${{ github.event.inputs.create_release_artifact != 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: MidiHarmonicHUD-VST3-${{ env.BUILD_TYPE }}-${{ github.sha }}
-          path: ${{ env.VST3_DIR }}/MidiHarmonicHUD-VST3.zip
+          name: MidiHarmonicHUD-VST3-${{ env.BUILD_TYPE }}-x86_64-${{ github.sha }}
+          path: ${{ env.VST3_DIR }}/MidiHarmonicHUD-VST3-x86_64.zip
           retention-days: 30
           if-no-files-found: error
 
-      # ---------------------------------------------------------------
       - name: 📋 Resumen del build
         if: always()
         run: |
@@ -141,8 +158,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parámetro | Valor |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | macOS 13 (Intel) |" >> $GITHUB_STEP_SUMMARY
           echo "| Build type | ${{ env.BUILD_TYPE }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Arquitecturas | x86_64;arm64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deployment target | macOS 10.13 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Arquitectura | **x86_64 (Intel only)** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment target | **macOS 10.13 (High Sierra)** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend gráfico | **CoreGraphics (sin Metal)** |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
