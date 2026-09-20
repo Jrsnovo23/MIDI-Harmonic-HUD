@@ -20,7 +20,6 @@ public:
 private:
     void timerCallback() override;
 
-    // Subsistemas de dibujo
     void drawHeader (juce::Graphics&, juce::Rectangle<int>);
     void drawDetectingPanel (juce::Graphics&, juce::Rectangle<int>);
     void drawCircleOfFifths (juce::Graphics&, juce::Rectangle<int>);
@@ -32,25 +31,22 @@ private:
     void drawTensionGradient (juce::Graphics&, juce::Rectangle<int>);
     void drawGlowText (juce::Graphics&, const juce::String&, juce::Rectangle<int>,
                        juce::Colour, float fontSize, float alpha);
-    void drawKeyDetection (juce::Graphics&, juce::Rectangle<int>);
 
     MidiHarmonicHUDProcessor& processorRef;
 
-    // APVTS attachments
-    juce::AudioProcessorValueTreeState::ButtonAttachment muteAttachment;
-    juce::AudioProcessorValueTreeState::ComboBoxAttachment presetAttachment;
-    juce::AudioProcessorValueTreeState::ComboBoxAttachment themeAttachment;
-
-    // Controles
+    // ⚠️ ORDEN CRÍTICO: primero los controles, DESPUÉS los attachments
     juce::ToggleButton muteButton { "Mute Piano" };
     juce::ComboBox presetCombo;
     juce::ComboBox themeCombo;
     juce::Label presetLabel, themeLabel;
 
-    // Tema actual (cacheado)
+    // Attachments (deben ir DESPUÉS de los controles)
+    juce::AudioProcessorValueTreeState::ButtonAttachment muteAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment presetAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment themeAttachment;
+
     ThemeColors theme;
 
-    // ===== Estado cacheado =====
     juce::String cachedChord { "---" };
     juce::StringArray cachedHistory;
     std::array<bool, 128> cachedActiveNotes {};
@@ -62,11 +58,10 @@ private:
     int   cachedActiveCount = 0;
     juce::String cachedKeyText { "---" };
     float cachedKeyConfidence = 0.0f;
+    int   cachedThemeId = 0;
 
-    // Buffer circular de tensión
     std::array<float, MidiHarmonicHUDProcessor::TENSION_HISTORY_SIZE> cachedTensionHistory {};
 
-    // ===== Animaciones =====
     juce::String lastDisplayedChord;
     juce::uint32 chordChangeTimeMs = 0;
     float chordFadeAlpha = 1.0f;
