@@ -1,74 +1,115 @@
 //==============================================================================
-void MidiHarmonicHUDEditor::timerCallback()
+MidiHarmonicHUDEditor::MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor& p)
+    : AudioProcessorEditor (&p),
+      processorRef (p),
+      // ⚠️ Los attachments van DESPUÉS de los controles en la clase,
+      //    así que aquí ya están construidos. Los inicializamos aquí con nullptr
+      //    y los enganchamos en el cuerpo del constructor.
+      muteAttachment (p.apvts, ParamIDs::muteSynth, muteButton),
+      presetAttachment (p.apvts, ParamIDs::presetIndex, presetCombo),
+      themeAttachment (p.apvts, ParamIDs::themeIndex, themeCombo)
 {
-    // Captura de estado
-    {
-        const juce::ScopedLock sl (processorRef.currentChordLock);
-        cachedChord = processorRef.currentChord;
-    }
-    {
-        const juce::ScopedLock sl (processorRef.chordHistoryLock);
-        cachedHistory = processorRef.chordHistory;
-    }
-    {
-        const juce::ScopedLock sl (processorRef.currentKeyLock);
-        cachedKeyText = processorRef.currentKeyText;
-    }
+    setSize (780, 800);
+    setResizable (false, false);
 
-    int count = 0;
-    for (int i = 0; i < 128; ++i)
-    {
-        bool on = processorRef.activeMidiNotes[i].load();
-        cachedActiveNotes[static_cast<size_t> (i)] = on;
-        if (on) ++count;
-    }
-    cachedActiveCount = count;
-
-    cachedConfidence = processorRef.chordConfidence.load();
-    cachedTension    = processorRef.harmonicTension.load();
-    cachedRootPC     = processorRef.currentRootPC.load();
-    cachedBassPC     = processorRef.currentBassPC.load();
-    cachedInversion  = processorRef.currentInversion.load();
-    cachedKeyConfidence = processorRef.detectedKeyConfidence.load();
-
-    // Copiar buffer circular de tensión
-    for (size_t i = 0; i < MidiHarmonicHUDProcessor::TENSION_HISTORY_SIZE; ++i)
-        cachedTensionHistory[i] = processorRef.tensionHistory[i].load();
-
-    // ⚠️ Leer parámetros con protección contra nullptr
+    // Leer tema inicial (con protección contra nullptr)
     if (auto* param = processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex))
         cachedThemeId = (int) param->load();
 
-    // Animación: fade del acorde
-    if (cachedChord != lastDisplayedChord)
+    theme = ThemeManager::getTheme (cachedThemeId);
+
+    // ---- Mute Button ----
+    muteButton.setColour (juce::ToggleButton::textColourId, theme.text);
+    muteButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
+    muteButton.setColour (juce::ToggleButton::tickDisabledColourId, theme.dimText);
+    addAndMakeVisible (muteButton);
+
+    // ---- Preset Combo ----
+    presetLabel.setText ("Preset", juce::dontSendNotification);
+    presetLabel.setColour (juce::Label::textColourId, theme.dimText);
+    presetLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    presetLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (presetLabel);
+
+    presetCombo.addItemList ({ "Electric Piano", "Warm Pad", "Pluck" }, 1);
+    presetCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
+    presetCombo.setColour (juce::ComboBox::textColourId, theme.text);
+    presetCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
+    presetCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
+    addAndMakeVisible (presetCombo);
+
+    // ---- Theme Combo ----
+    themeLabel.setText ("Theme", juce::dontSendNotification);
+    themeLabel.setColour (juce::Label::textColourId, theme.dimText);
+    themeLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    themeLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (themeLabel);
+
+    themeCombo.addItemList (ThemeManager::getThemeNames(), 1);
+    themeCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
+    themeCombo.setColour (juce::ComboBox::textColourId, theme.text);
+    themeCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
+    themeCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
+    themeCombo.onChange = [this]()
     {
-        lastDisplayedChord = cachedChord;
-        chordChangeTimeMs = juce::Time::getMillisecondCounter();
-    }
-    auto elapsed = juce::Time::getMillisecondCounter() - chordChangeTimeMs;
-    chordFadeAlpha = juce::jmin (1.0f, (float) elapsed / 350.0f);
+        int id = themeCombo.getSelectedId() - 1;
+        theme = ThemeManager::getTheme (id);
+        repaint();
+    };
+    addAndMakeVisible (themeCombo);
 
-    confidenceSmooth += (cachedConfidence - confidenceSmooth) * 0.18f;
-    tensionSmooth    += (cachedTension    - tensionSmooth)    * 0.18f;
+    startTimerHz (60);
+}
 
-    if (cachedRootPC >= 0)
+//==============================================================================
+void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
+{
+    // Refrescar tema si cambió (leído en timerCallback, no aquí)
+    if (themeCombo.getSelectedId() - 1 != cachedThemeId)
     {
-        int rootIndex = 0;
-        for (int i = 0; i < 12; ++i)
-            if (kFifthOrderPC[i] == cachedRootPC) { rootIndex = i; break; }
-
-        targetRotation = -juce::MathConstants<float>::twoPi
-                       * ((float) rootIndex / 12.0f);
+        theme = ThemeManager::getTheme (cachedThemeId);
+        themeCombo.setSelectedId (cachedThemeId + 1, juce::dontSendNotification);
     }
 
-    float diff = targetRotation - circleRotation;
-    while (diff >  juce::MathConstants<float>::pi) diff -= juce::MathConstants<float>::twoPi;
-    while (diff < -juce::MathConstants<float>::pi) diff += juce::MathConstants<float>::twoPi;
-    circleRotation += diff * 0.12f;
+    // Fondo
+    juce::ColourGradient bgGrad (theme.bg2, getWidth() * 0.5f, 0.0f,
+                                  theme.bg,  getWidth() * 0.5f, (float) getHeight(), true);
+    g.setGradientFill (bgGrad);
+    g.fillAll();
 
-    circleGlowPhase += 0.08f;
-    if (circleGlowPhase > juce::MathConstants<float>::twoPi)
-        circleGlowPhase -= juce::MathConstants<float>::twoPi;
+    // Grid sutil
+    g.setColour (juce::Colour (0xffffffff).withAlpha (0.012f));
+    for (int x = 0; x < getWidth(); x += 20)
+        g.drawVerticalLine (x, 0.0f, (float) getHeight());
+    for (int y = 0; y < getHeight(); y += 20)
+        g.drawHorizontalLine (y, 0.0f, (float) getWidth());
 
-    repaint();
+    // Layout
+    auto bounds = getLocalBounds().reduced (12);
+    auto headerArea = bounds.removeFromTop (40);
+    bounds.removeFromTop (8);
+    drawHeader (g, headerArea);
+
+    auto row1 = bounds.removeFromTop (260);
+    auto detectingArea = row1.removeFromLeft (380);
+    row1.removeFromLeft (8);
+    auto circleArea = row1;
+    drawDetectingPanel (g, detectingArea);
+    drawCircleOfFifths (g, circleArea);
+
+    bounds.removeFromTop (8);
+    auto keyboardArea = bounds.removeFromTop (110);
+    drawPianoKeyboard (g, keyboardArea);
+
+    bounds.removeFromTop (8);
+    auto row3 = bounds.removeFromTop (160);
+    auto historyArea = row3.removeFromLeft (380);
+    row3.removeFromLeft (8);
+    auto diatonicArea = row3;
+    drawHistoryPanel (g, historyArea);
+    drawDiatonicPanel (g, diatonicArea);
+
+    bounds.removeFromTop (8);
+    auto tensionArea = bounds.removeFromTop (100);
+    drawTensionGraph (g, tensionArea);
 }
