@@ -1,115 +1,91 @@
-//==============================================================================
-MidiHarmonicHUDEditor::MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor& p)
-    : AudioProcessorEditor (&p),
-      processorRef (p),
-      // ⚠️ Los attachments van DESPUÉS de los controles en la clase,
-      //    así que aquí ya están construidos. Los inicializamos aquí con nullptr
-      //    y los enganchamos en el cuerpo del constructor.
-      muteAttachment (p.apvts, ParamIDs::muteSynth, muteButton),
-      presetAttachment (p.apvts, ParamIDs::presetIndex, presetCombo),
-      themeAttachment (p.apvts, ParamIDs::themeIndex, themeCombo)
-{
-    setSize (780, 800);
-    setResizable (false, false);
+#pragma once
 
-    // Leer tema inicial (con protección contra nullptr)
-    if (auto* param = processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex))
-        cachedThemeId = (int) param->load();
-
-    theme = ThemeManager::getTheme (cachedThemeId);
-
-    // ---- Mute Button ----
-    muteButton.setColour (juce::ToggleButton::textColourId, theme.text);
-    muteButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
-    muteButton.setColour (juce::ToggleButton::tickDisabledColourId, theme.dimText);
-    addAndMakeVisible (muteButton);
-
-    // ---- Preset Combo ----
-    presetLabel.setText ("Preset", juce::dontSendNotification);
-    presetLabel.setColour (juce::Label::textColourId, theme.dimText);
-    presetLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
-    presetLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (presetLabel);
-
-    presetCombo.addItemList ({ "Electric Piano", "Warm Pad", "Pluck" }, 1);
-    presetCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
-    presetCombo.setColour (juce::ComboBox::textColourId, theme.text);
-    presetCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
-    presetCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
-    addAndMakeVisible (presetCombo);
-
-    // ---- Theme Combo ----
-    themeLabel.setText ("Theme", juce::dontSendNotification);
-    themeLabel.setColour (juce::Label::textColourId, theme.dimText);
-    themeLabel.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
-    themeLabel.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (themeLabel);
-
-    themeCombo.addItemList (ThemeManager::getThemeNames(), 1);
-    themeCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
-    themeCombo.setColour (juce::ComboBox::textColourId, theme.text);
-    themeCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
-    themeCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
-    themeCombo.onChange = [this]()
-    {
-        int id = themeCombo.getSelectedId() - 1;
-        theme = ThemeManager::getTheme (id);
-        repaint();
-    };
-    addAndMakeVisible (themeCombo);
-
-    startTimerHz (60);
-}
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <array>
+#include "PluginProcessor.h"
+#include "ThemeManager.h"
 
 //==============================================================================
-void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
+class MidiHarmonicHUDEditor : public juce::AudioProcessorEditor,
+                              private juce::Timer
 {
-    // Refrescar tema si cambió (leído en timerCallback, no aquí)
-    if (themeCombo.getSelectedId() - 1 != cachedThemeId)
-    {
-        theme = ThemeManager::getTheme (cachedThemeId);
-        themeCombo.setSelectedId (cachedThemeId + 1, juce::dontSendNotification);
-    }
+public:
+    explicit MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor&);
+    ~MidiHarmonicHUDEditor() override;
 
-    // Fondo
-    juce::ColourGradient bgGrad (theme.bg2, getWidth() * 0.5f, 0.0f,
-                                  theme.bg,  getWidth() * 0.5f, (float) getHeight(), true);
-    g.setGradientFill (bgGrad);
-    g.fillAll();
+    void paint (juce::Graphics&) override;
+    void resized() override;
 
-    // Grid sutil
-    g.setColour (juce::Colour (0xffffffff).withAlpha (0.012f));
-    for (int x = 0; x < getWidth(); x += 20)
-        g.drawVerticalLine (x, 0.0f, (float) getHeight());
-    for (int y = 0; y < getHeight(); y += 20)
-        g.drawHorizontalLine (y, 0.0f, (float) getWidth());
+private:
+    void timerCallback() override;
 
-    // Layout
-    auto bounds = getLocalBounds().reduced (12);
-    auto headerArea = bounds.removeFromTop (40);
-    bounds.removeFromTop (8);
-    drawHeader (g, headerArea);
+    // Subsistemas de dibujo
+    void drawHeader (juce::Graphics&, juce::Rectangle<int>);
+    void drawDetectingPanel (juce::Graphics&, juce::Rectangle<int>);
+    void drawCircleOfFifths (juce::Graphics&, juce::Rectangle<int>);
+    void drawPianoKeyboard (juce::Graphics&, juce::Rectangle<int>);
+    void drawHistoryPanel (juce::Graphics&, juce::Rectangle<int>);
+    void drawDiatonicPanel (juce::Graphics&, juce::Rectangle<int>);
+    void drawTensionGraph (juce::Graphics&, juce::Rectangle<int>);
+    void drawConfidenceMeter (juce::Graphics&, juce::Rectangle<int>);
+    void drawTensionGradient (juce::Graphics&, juce::Rectangle<int>);
+    void drawGlowText (juce::Graphics&, const juce::String&, juce::Rectangle<int>,
+                       juce::Colour, float fontSize, float alpha);
 
-    auto row1 = bounds.removeFromTop (260);
-    auto detectingArea = row1.removeFromLeft (380);
-    row1.removeFromLeft (8);
-    auto circleArea = row1;
-    drawDetectingPanel (g, detectingArea);
-    drawCircleOfFifths (g, circleArea);
+    MidiHarmonicHUDProcessor& processorRef;
 
-    bounds.removeFromTop (8);
-    auto keyboardArea = bounds.removeFromTop (110);
-    drawPianoKeyboard (g, keyboardArea);
+    // =========================================================================
+    // ⚠️ ORDEN CRÍTICO: PRIMERO los controles de UI, DESPUÉS los attachments.
+    // En C++, los miembros se inicializan en el orden de declaración, NO en
+    // el orden de la lista de inicialización del constructor. Si los
+    // attachments van antes que los controles, intentan engancharse a un
+    // objeto que aún no existe → CRASH al instanciar en Ableton Live.
+    // =========================================================================
 
-    bounds.removeFromTop (8);
-    auto row3 = bounds.removeFromTop (160);
-    auto historyArea = row3.removeFromLeft (380);
-    row3.removeFromLeft (8);
-    auto diatonicArea = row3;
-    drawHistoryPanel (g, historyArea);
-    drawDiatonicPanel (g, diatonicArea);
+    // ---- 1) Controles de UI ----
+    juce::ToggleButton muteButton { "Mute Piano" };
+    juce::ComboBox presetCombo;
+    juce::ComboBox themeCombo;
+    juce::Label presetLabel;
+    juce::Label themeLabel;
 
-    bounds.removeFromTop (8);
-    auto tensionArea = bounds.removeFromTop (100);
-    drawTensionGraph (g, tensionArea);
-}
+    // ---- 2) Attachments (deben ir DESPUÉS de los controles) ----
+    juce::AudioProcessorValueTreeState::ButtonAttachment   muteAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment presetAttachment;
+    juce::AudioProcessorValueTreeState::ComboBoxAttachment themeAttachment;
+
+    // ---- 3) Tema actual ----
+    ThemeColors theme;
+
+    // ---- 4) Estado cacheado ----
+    juce::String cachedChord { "---" };
+    juce::StringArray cachedHistory;
+    std::array<bool, 128> cachedActiveNotes {};
+    float cachedConfidence = 0.0f;
+    float cachedTension    = 0.0f;
+    int   cachedRootPC     = -1;
+    int   cachedBassPC     = -1;
+    int   cachedInversion  = 0;
+    int   cachedActiveCount = 0;
+    juce::String cachedKeyText { "---" };
+    float cachedKeyConfidence = 0.0f;
+    int   cachedThemeId = 0;
+
+    // ---- 5) Buffer circular de tensión ----
+    std::array<float, MidiHarmonicHUDProcessor::TENSION_HISTORY_SIZE> cachedTensionHistory {};
+
+    // ---- 6) Animaciones ----
+    juce::String lastDisplayedChord;
+    juce::uint32 chordChangeTimeMs = 0;
+    float chordFadeAlpha = 1.0f;
+
+    float circleRotation = 0.0f;
+    float targetRotation = 0.0f;
+    float circleGlowPhase = 0.0f;
+
+    float confidenceSmooth = 0.0f;
+    float tensionSmooth    = 0.0f;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiHarmonicHUDEditor)
+};
