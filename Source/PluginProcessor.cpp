@@ -227,7 +227,8 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
 
     synth.addSound (new BasicSynthSound());
 
-    // ⚠️ Sin addParameterListener: usamos polling en processBlock
+    // ⚠️ NO usamos addParameterListener: el polling manual en processBlock
+    //    es suficiente y evita problemas con la clase Listener.
 }
 
 MidiHarmonicHUDProcessor::~MidiHarmonicHUDProcessor() = default;
@@ -297,6 +298,7 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Capturar eventos MIDI
     for (const auto metadata : midiMessages)
     {
         auto message = metadata.getMessage();
@@ -329,16 +331,21 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     decayHistogramIfNeeded();
     detectChordFromActiveNotes();
 
-    bool muteParam = apvts.getRawParameterValue (ParamIDs::muteSynth)->load() > 0.5f;
-    muteSynth.store (muteParam);
+    // ⚠️ Lectura segura de parámetros con chequeo de nullptr
+    if (auto* muteParam = apvts.getRawParameterValue (ParamIDs::muteSynth))
+        muteSynth.store (muteParam->load() > 0.5f);
 
-    int preset = (int) apvts.getRawParameterValue (ParamIDs::presetIndex)->load();
+    int preset = 0;
+    if (auto* presetParam = apvts.getRawParameterValue (ParamIDs::presetIndex))
+        preset = (int) presetParam->load();
+
     for (int i = 0; i < synth.getNumVoices(); ++i)
     {
         if (auto* v = dynamic_cast<BasicSynthVoice*> (synth.getVoice (i)))
             v->setPreset (preset);
     }
 
+    // Render de audio
     if (!muteSynth.load())
     {
         synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
@@ -435,7 +442,7 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
     for (int pc : pcSet)
         intervals.insert ((pc - root + 12) % 12);
 
-    // --- Tensión ---
+    // --- Tensión armónica ---
     float tensionSum = 0.0f;
     int   tensionCount = 0;
     for (int i : intervals)
@@ -448,6 +455,7 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         ? juce::jlimit (0.0f, 1.0f, (tensionSum / (float) tensionCount) * 1.4f)
         : 0.0f;
 
+    // --- Nota única ---
     if (notes.size() == 1)
     {
         result.name = noteName (sorted[0]);
@@ -456,7 +464,7 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         return result;
     }
 
-    // --- Patrones ---
+    // --- Patrones de acordes ---
     struct ChordPattern
     {
         std::vector<int> intervals;
@@ -541,6 +549,7 @@ ChordAnalysis MidiHarmonicHUDProcessor::analyzeChord (const std::vector<int>& no
         return result;
     }
 
+    // Fallback: mostrar notas individuales
     juce::String fallback;
     for (size_t i = 0; i < sorted.size(); ++i)
     {
