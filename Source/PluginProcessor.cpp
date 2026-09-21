@@ -219,7 +219,6 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
     for (int i = 0; i < 128; ++i)
         activeMidiNotes[i].store (false);
 
-    // ⚠️ FIX: inicializar como float
     for (size_t i = 0; i < pitchClassHistogram.size(); ++i)
         pitchClassHistogram[i].store (0.0f);
 
@@ -277,7 +276,7 @@ void MidiHarmonicHUDProcessor::decayHistogramIfNeeded()
     auto now = juce::Time::getMillisecondCounter();
     auto last = lastDecayMs.load();
 
-    // ⚠️ FIX: decae cada 1 segundo (antes 500 ms) y de forma suave
+    // Decae cada 1 segundo (ventana útil ~10 s)
     if (now - last < 1000) return;
     lastDecayMs.store (now);
 
@@ -285,7 +284,6 @@ void MidiHarmonicHUDProcessor::decayHistogramIfNeeded()
     {
         float v = pitchClassHistogram[i].load();
 
-        // Decae 10% por segundo → ventana útil ~10-15 segundos
         if (v > 0.005f)
             pitchClassHistogram[i].store (v * 0.9f);
         else
@@ -317,8 +315,12 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 activeMidiNotes[n].store (true);
 
                 int pc = n % 12;
-                // ⚠️ FIX: acumular como float
-                pitchClassHistogram[static_cast<size_t> (pc)].fetch_add (1.0f);
+
+                // ⚠️ FIX C++17: std::atomic<float> no tiene fetch_add
+                // Solo el audio thread escribe aquí, así que load+store es seguro.
+                auto& slot = pitchClassHistogram[static_cast<size_t> (pc)];
+                slot.store (slot.load() + 1.0f);
+
                 totalNotesSeen.fetch_add (1);
             }
         }
@@ -583,7 +585,6 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
     float total = 0.0f;
     for (size_t i = 0; i < obs.size(); ++i)
     {
-        // ⚠️ FIX: ya es float, sin cast necesario (pero lo dejamos por claridad)
         obs[i] = pitchClassHistogram[i].load();
         total += obs[i];
     }
