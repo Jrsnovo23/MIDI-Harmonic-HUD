@@ -40,7 +40,6 @@ private:
     juce::ComboBox themeCombo;
     juce::Label presetLabel, themeLabel;
 
-    // Attachments (deben ir DESPUÉS de los controles)
     juce::AudioProcessorValueTreeState::ButtonAttachment muteAttachment;
     juce::AudioProcessorValueTreeState::ComboBoxAttachment presetAttachment;
     juce::AudioProcessorValueTreeState::ComboBoxAttachment themeAttachment;
