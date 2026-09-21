@@ -50,11 +50,6 @@ void BasicSynthVoice::setCurrentPlaybackSampleRate (double newRate)
 
 void BasicSynthVoice::setPreset (int presetIndex)
 {
-    // Optimización: evitar recalcular si ya estamos en este preset
-    if (presetIndex == currentPreset && lastPresetInitializedFlag)
-        return;
-
-    lastPresetInitializedFlag = true;
     currentPreset = juce::jlimit (0, 2, presetIndex);
 
     switch (currentPreset)
@@ -81,7 +76,6 @@ void BasicSynthVoice::setPreset (int presetIndex)
 
     updateEnvelopeIncrements();
 }
-
 void BasicSynthVoice::updateEnvelopeIncrements()
 {
     if (sampleRate <= 0.0) return;
