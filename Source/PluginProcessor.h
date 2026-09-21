@@ -46,7 +46,6 @@ public:
 
     void setCurrentPlaybackSampleRate (double newRate) override;
 
-    // Parámetros ajustables desde el procesador
     void setPreset (int presetIndex);
 
 private:
@@ -55,19 +54,18 @@ private:
         float harmonic2Gain;
         float harmonic3Gain;
         float harmonic5Gain;
-        float attackTime;    // segundos
-        float decayTime;     // segundos
-        float sustainLevel;  // 0..1
-        float releaseTime;   // segundos
-        float filterCutoff;  // Hz base
+        float attackTime;
+        float decayTime;
+        float sustainLevel;
+        float releaseTime;
+        float filterCutoff;
         float filterQ;
-        float filterEnvAmount; // 0..1
+        float filterEnvAmount;
     };
 
     PresetParams preset;
     int currentPreset = 0;
 
-    // Osciladores (fases)
     double phase1 = 0.0;
     double phase2 = 0.0;
     double phase3 = 0.0;
@@ -77,7 +75,6 @@ private:
     double sampleRate = 44100.0;
     float  velocity = 0.0f;
 
-    // Envolvente ADSR
     enum class EnvStage { Idle, Attack, Decay, Sustain, Release };
     EnvStage envStage = EnvStage::Idle;
     float envLevel = 0.0f;
@@ -85,7 +82,6 @@ private:
     float envDecayCoef = 0.0f;
     float envReleaseCoef = 0.0f;
 
-    // Filtro paso-bajo (State Variable Filter, un polo)
     float filterState = 0.0f;
     float filterEnv = 0.0f;
     float filterCutoffHz = 2000.0f;
@@ -97,26 +93,24 @@ private:
 };
 
 //==============================================================================
-// Análisis de acorde con inversión
 struct ChordAnalysis
 {
     juce::String name { "---" };
-    juce::String baseName { "---" };     // sin inversión, ej: "Cmaj"
-    juce::String inversionText {};        // ej: "/E" o "/G"
+    juce::String baseName { "---" };
+    juce::String inversionText {};
     float confidence = 0.0f;
     float tension = 0.0f;
     int   rootPitchClass = -1;
     int   bassPitchClass = -1;
-    int   inversion = 0;                  // 0=fundamental, 1=primera, 2=segunda, 3=tercera
+    int   inversion = 0;
 };
 
 //==============================================================================
-// Detección de tonalidad Krumhansl-Schmuckler
 struct KeyDetection
 {
-    juce::String name { "---" };          // ej: "C Major" o "A Minor"
-    float confidence = 0.0f;              // 0..1
-    int   tonicPitchClass = -1;           // 0..11
+    juce::String name { "---" };
+    float confidence = 0.0f;
+    int   tonicPitchClass = -1;
     bool  isMinor = false;
 };
 
@@ -151,7 +145,6 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     //==========================================================================
-    // APVTS
     juce::AudioProcessorValueTreeState apvts;
 
     //==========================================================================
@@ -159,24 +152,20 @@ public:
     std::atomic<bool> activeMidiNotes[128];
     std::atomic<bool> muteSynth { false };
 
-    // Análisis armónico
     std::atomic<float> chordConfidence { 0.0f };
     std::atomic<float> harmonicTension { 0.0f };
     std::atomic<int>   currentRootPC    { -1 };
     std::atomic<int>   currentBassPC    { -1 };
     std::atomic<int>   currentInversion { 0 };
 
-    // Historial de tension (buffer circular)
     static constexpr int TENSION_HISTORY_SIZE = 256;
     std::array<std::atomic<float>, TENSION_HISTORY_SIZE> tensionHistory;
     std::atomic<int> tensionHistoryWritePos { 0 };
 
-    // Tonalidad detectada
     std::atomic<int>   detectedKeyTonic { -1 };
     std::atomic<bool>  detectedKeyIsMinor { false };
     std::atomic<float> detectedKeyConfidence { 0.0f };
 
-    // Historial FIFO de acordes
     juce::StringArray chordHistory;
     juce::CriticalSection chordHistoryLock;
 
@@ -194,11 +183,11 @@ public:
 private:
     juce::Synthesiser synth;
 
-    // Contadores de notas (para detección de tonalidad)
+    // Último preset aplicado a las voces (para evitar llamadas redundantes)
+    int lastPreset = -1;
+
     std::array<std::atomic<int>, 12> pitchClassHistogram;
     std::atomic<uint32_t> totalNotesSeen { 0 };
-
-    // Tiempo de la última detección para decaimiento
     std::atomic<uint32_t> lastDecayMs { 0 };
 
     void detectChordFromActiveNotes();
