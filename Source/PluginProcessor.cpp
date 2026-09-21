@@ -76,6 +76,7 @@ void BasicSynthVoice::setPreset (int presetIndex)
 
     updateEnvelopeIncrements();
 }
+
 void BasicSynthVoice::updateEnvelopeIncrements()
 {
     if (sampleRate <= 0.0) return;
@@ -218,8 +219,9 @@ MidiHarmonicHUDProcessor::MidiHarmonicHUDProcessor()
     for (int i = 0; i < 128; ++i)
         activeMidiNotes[i].store (false);
 
+    // ⚠️ FIX: inicializar como float
     for (size_t i = 0; i < pitchClassHistogram.size(); ++i)
-        pitchClassHistogram[i].store (0);
+        pitchClassHistogram[i].store (0.0f);
 
     for (size_t i = 0; i < tensionHistory.size(); ++i)
         tensionHistory[i].store (0.0f);
@@ -275,14 +277,19 @@ void MidiHarmonicHUDProcessor::decayHistogramIfNeeded()
     auto now = juce::Time::getMillisecondCounter();
     auto last = lastDecayMs.load();
 
-    if (now - last < 500) return;
+    // ⚠️ FIX: decae cada 1 segundo (antes 500 ms) y de forma suave
+    if (now - last < 1000) return;
     lastDecayMs.store (now);
 
     for (size_t i = 0; i < pitchClassHistogram.size(); ++i)
     {
-        int v = pitchClassHistogram[i].load();
-        if (v > 0)
-            pitchClassHistogram[i].store ((int) ((float) v * 0.95f));
+        float v = pitchClassHistogram[i].load();
+
+        // Decae 10% por segundo → ventana útil ~10-15 segundos
+        if (v > 0.005f)
+            pitchClassHistogram[i].store (v * 0.9f);
+        else
+            pitchClassHistogram[i].store (0.0f);
     }
 }
 
@@ -310,7 +317,8 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 activeMidiNotes[n].store (true);
 
                 int pc = n % 12;
-                pitchClassHistogram[static_cast<size_t> (pc)].fetch_add (1);
+                // ⚠️ FIX: acumular como float
+                pitchClassHistogram[static_cast<size_t> (pc)].fetch_add (1.0f);
                 totalNotesSeen.fetch_add (1);
             }
         }
@@ -338,7 +346,7 @@ void MidiHarmonicHUDProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (auto* presetParam = apvts.getRawParameterValue (ParamIDs::presetIndex))
         preset = (int) presetParam->load();
 
-    // ⚡ Solo aplicar el preset a las voces cuando cambia
+    // Solo aplicar el preset a las voces cuando cambia
     if (preset != lastPreset)
     {
         lastPreset = preset;
@@ -575,7 +583,8 @@ KeyDetection MidiHarmonicHUDProcessor::detectKey()
     float total = 0.0f;
     for (size_t i = 0; i < obs.size(); ++i)
     {
-        obs[i] = (float) pitchClassHistogram[i].load();
+        // ⚠️ FIX: ya es float, sin cast necesario (pero lo dejamos por claridad)
+        obs[i] = pitchClassHistogram[i].load();
         total += obs[i];
     }
 
