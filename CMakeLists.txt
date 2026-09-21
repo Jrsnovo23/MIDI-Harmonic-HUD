@@ -35,7 +35,7 @@ juce_add_plugin(MidiHarmonicHUD
 )
 
 # ============================================================================
-# Fuentes (añadimos ThemeManager.cpp)
+# Fuentes (incluye ThemeManager.cpp)
 # ============================================================================
 target_sources(MidiHarmonicHUD PRIVATE
     Source/PluginProcessor.cpp
@@ -66,6 +66,9 @@ if(APPLE)
     )
 endif()
 
+# ⚠️ NOTA: JUCE_OPENGL y JUCE_OPENGL_ES eliminados.
+# OpenGL está deprecado en JUCE 8 y puede causar problemas
+# en macOS High Sierra con CoreGraphics. El HUD no lo necesita.
 target_compile_definitions(MidiHarmonicHUD PUBLIC
     JUCE_COREGRAPHICS_RENDER_WITH_METAL=0
     JUCE_COREGRAPHICS_DRAW_ASYNC=0
@@ -73,6 +76,4 @@ target_compile_definitions(MidiHarmonicHUD PUBLIC
     JUCE_USE_CURL=0
     JUCE_USE_CAMERA=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_OPENGL=1
-    JUCE_OPENGL_ES=0
 )
