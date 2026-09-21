@@ -26,7 +26,10 @@ MidiHarmonicHUDEditor::MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor& p)
     setResizable (false, false);
 
     // Cargar tema inicial
-    int themeId = (int) processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex)->load();
+    int themeId = 0;
+    if (auto* p2 = processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex))
+        themeId = (int) p2->load();
+    cachedThemeId = themeId;
     theme = ThemeManager::getTheme (themeId);
 
     // ---- Mute Button ----
@@ -61,10 +64,29 @@ MidiHarmonicHUDEditor::MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor& p)
     themeCombo.setColour (juce::ComboBox::textColourId, theme.text);
     themeCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
     themeCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
+    themeCombo.setSelectedId (themeId + 1, juce::dontSendNotification);
+
+    // Reaccionar al cambio de tema desde la UI
     themeCombo.onChange = [this]()
     {
         int id = themeCombo.getSelectedId() - 1;
+        cachedThemeId = id;
         theme = ThemeManager::getTheme (id);
+
+        // Actualizar colores de los controles
+        muteButton.setColour (juce::ToggleButton::textColourId, theme.text);
+        muteButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
+        presetLabel.setColour (juce::Label::textColourId, theme.dimText);
+        themeLabel.setColour (juce::Label::textColourId, theme.dimText);
+        presetCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
+        presetCombo.setColour (juce::ComboBox::textColourId, theme.text);
+        presetCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
+        presetCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
+        themeCombo.setColour (juce::ComboBox::backgroundColourId, theme.panel);
+        themeCombo.setColour (juce::ComboBox::textColourId, theme.text);
+        themeCombo.setColour (juce::ComboBox::outlineColourId, theme.panelStroke);
+        themeCombo.setColour (juce::ComboBox::arrowColourId, theme.accent);
+
         repaint();
     };
     addAndMakeVisible (themeCombo);
@@ -80,14 +102,6 @@ MidiHarmonicHUDEditor::~MidiHarmonicHUDEditor()
 //==============================================================================
 void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
 {
-    // Refrescar tema por si cambió
-    int themeId = (int) processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex)->load();
-    if (themeCombo.getSelectedId() - 1 != themeId)
-    {
-        theme = ThemeManager::getTheme (themeId);
-        themeCombo.setSelectedId (themeId + 1, juce::dontSendNotification);
-    }
-
     // Fondo con gradiente radial
     juce::ColourGradient bgGrad (theme.bg2, getWidth() * 0.5f, 0.0f,
                                   theme.bg,  getWidth() * 0.5f, (float) getHeight(), true);
@@ -192,7 +206,7 @@ void MidiHarmonicHUDEditor::drawDetectingPanel (juce::Graphics& g, juce::Rectang
     inner.removeFromTop (6);
 
     auto chordArea = inner.removeFromTop (96);
-    bool hasChord = (cachedChord != "---" && !cachedChord.isEmpty());
+    bool hasChord = (cachedChord != "---" && ! cachedChord.isEmpty());
 
     if (hasChord)
     {
@@ -474,7 +488,7 @@ void MidiHarmonicHUDEditor::drawPianoKeyboard (juce::Graphics& g, juce::Rectangl
     whiteIndex = 0;
     for (int n = lowMidi; n <= highMidi; ++n)
     {
-        if (!isBlackKey (n)) { ++whiteIndex; continue; }
+        if (! isBlackKey (n)) { ++whiteIndex; continue; }
 
         float x = keyArea.getX() + whiteIndex * whiteWidth - blackWidth * 0.5f;
         juce::Rectangle<float> key (x, (float) keyArea.getY(), blackWidth, blackHeight);
@@ -515,4 +529,292 @@ void MidiHarmonicHUDEditor::drawHistoryPanel (juce::Graphics& g, juce::Rectangle
     auto inner = area.reduced (14);
 
     g.setColour (theme.dimText);
-    g.setF
+    g.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    g.drawText ("HISTORY", inner.removeFromTop (16),
+                juce::Justification::topLeft, false);
+
+    inner.removeFromTop (6);
+
+    if (cachedHistory.isEmpty())
+    {
+        g.setColour (theme.dimText.withAlpha (0.4f));
+        g.setFont (juce::Font (juce::FontOptions (14.0f)));
+        g.drawText ("No chords yet", inner,
+                    juce::Justification::centred, false);
+        return;
+    }
+
+    for (int i = 0; i < cachedHistory.size(); ++i)
+    {
+        auto rowArea = inner.removeFromTop (28);
+        bool isCurrent = (i == 0);
+
+        if (isCurrent)
+        {
+            g.setColour (theme.accent.withAlpha (0.12f));
+            g.fillRoundedRectangle (rowArea.toFloat(), 4.0f);
+        }
+
+        g.setColour (theme.dimText.withAlpha (0.5f));
+        g.setFont (juce::Font (juce::FontOptions (10.0f).withStyle ("Bold")));
+        g.drawText ("#" + juce::String (i + 1),
+                    rowArea.removeFromLeft (28),
+                    juce::Justification::centredLeft, false);
+
+        g.setColour (isCurrent ? theme.accent : theme.text.withAlpha (0.75f));
+        g.setFont (juce::Font (juce::FontOptions (isCurrent ? 16.0f : 14.0f)
+                                .withStyle (isCurrent ? "Bold" : "Regular")));
+        g.drawText (cachedHistory[i], rowArea,
+                    juce::Justification::centredLeft, false);
+    }
+}
+
+//==============================================================================
+void MidiHarmonicHUDEditor::drawDiatonicPanel (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    g.setColour (theme.panel);
+    g.fillRoundedRectangle (area.toFloat(), 12.0f);
+    g.setColour (theme.panelStroke);
+    g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 12.0f, 1.0f);
+
+    auto inner = area.reduced (14);
+
+    g.setColour (theme.dimText);
+    g.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    g.drawText ("DIATONIC CONTEXT", inner.removeFromTop (16),
+                juce::Justification::topLeft, false);
+
+    inner.removeFromTop (6);
+
+    // Fila de tonalidad
+    auto keyRow = inner.removeFromTop (30);
+    g.setColour (theme.dimText);
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.drawText ("Key:", keyRow.removeFromLeft (40),
+                juce::Justification::centredLeft, false);
+
+    g.setColour (theme.text);
+    g.setFont (juce::Font (juce::FontOptions (16.0f).withStyle ("Bold")));
+    g.drawText (cachedKeyText, keyRow.removeFromLeft (140),
+                juce::Justification::centredLeft, false);
+
+    if (cachedKeyConfidence > 0.01f)
+    {
+        juce::String confStr = juce::String (juce::roundToInt (cachedKeyConfidence * 100.0f)) + "%";
+        g.setColour (theme.accent.withAlpha (0.75f));
+        g.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+        g.drawText (confStr, keyRow.removeFromLeft (50),
+                    juce::Justification::centredLeft, false);
+    }
+
+    inner.removeFromTop (6);
+
+    // Escala diatónica (7 grados)
+    static const int majorScale[7] = { 0, 2, 4, 5, 7, 9, 11 };
+    static const int minorScale[7] = { 0, 2, 3, 5, 7, 8, 10 };
+
+    int tonic = processorRef.detectedKeyTonic.load();
+
+    if (tonic >= 0 && cachedActiveCount > 0)
+    {
+        bool isMinor = processorRef.detectedKeyIsMinor.load();
+        const int* scale = isMinor ? minorScale : majorScale;
+
+        auto scaleRow = inner.removeFromTop (30);
+        float cellW = (float) scaleRow.getWidth() / 7.0f;
+
+        for (int deg = 0; deg < 7; ++deg)
+        {
+            int pc = (tonic + scale[deg]) % 12;
+            juce::Rectangle<float> cell ((float) scaleRow.getX() + deg * cellW,
+                                          (float) scaleRow.getY(),
+                                          cellW - 4.0f,
+                                          (float) scaleRow.getHeight());
+
+            g.setColour (theme.panelStroke);
+            g.fillRoundedRectangle (cell, 4.0f);
+
+            g.setColour (theme.text.withAlpha (0.85f));
+            g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+            g.drawText (kPCNames[pc], cell.toNearestInt(),
+                        juce::Justification::centred, false);
+        }
+    }
+    else
+    {
+        g.setColour (theme.dimText.withAlpha (0.5f));
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        g.drawText ("Play notes to detect key...", inner,
+                    juce::Justification::centredLeft, false);
+    }
+}
+
+//==============================================================================
+void MidiHarmonicHUDEditor::drawTensionGraph (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    g.setColour (theme.panel);
+    g.fillRoundedRectangle (area.toFloat(), 12.0f);
+    g.setColour (theme.panelStroke);
+    g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 12.0f, 1.0f);
+
+    auto inner = area.reduced (14);
+
+    g.setColour (theme.dimText);
+    g.setFont (juce::Font (juce::FontOptions (10.5f).withStyle ("Bold")));
+    g.drawText ("TENSION HISTORY", inner.removeFromTop (16),
+                juce::Justification::topLeft, false);
+
+    inner.removeFromTop (4);
+
+    auto graphArea = inner.toFloat();
+
+    g.setColour (theme.bg.darker (0.3f));
+    g.fillRoundedRectangle (graphArea, 4.0f);
+
+    // Grid horizontal
+    g.setColour (juce::Colour (0xffffffff).withAlpha (0.04f));
+    for (int i = 1; i < 4; ++i)
+    {
+        float y = graphArea.getY() + graphArea.getHeight() * (float) i / 4.0f;
+        g.drawHorizontalLine ((int) y, graphArea.getX(), graphArea.getRight());
+    }
+
+    const int size = MidiHarmonicHUDProcessor::TENSION_HISTORY_SIZE;
+    int writePos = processorRef.tensionHistoryWritePos.load();
+
+    juce::Path path;
+    bool started = false;
+
+    for (int i = 0; i < size; ++i)
+    {
+        int idx = (writePos + i) % size;
+        float v = processorRef.tensionHistory[static_cast<size_t> (idx)].load();
+        float x = graphArea.getX() + graphArea.getWidth() * ((float) i / (float) (size - 1));
+        float y = graphArea.getBottom() - graphArea.getHeight() * juce::jlimit (0.0f, 1.0f, v);
+
+        if (! started) { path.startNewSubPath (x, y); started = true; }
+        else           { path.lineTo (x, y); }
+    }
+
+    if (started)
+    {
+        juce::Path fillPath = path;
+        fillPath.lineTo (graphArea.getRight(), graphArea.getBottom());
+        fillPath.lineTo (graphArea.getX(), graphArea.getBottom());
+        fillPath.closeSubPath();
+
+        juce::ColourGradient grad (theme.accent.withAlpha (0.35f), graphArea.getX(), graphArea.getY(),
+                                    theme.accent.withAlpha (0.02f), graphArea.getX(), graphArea.getBottom(), false);
+        g.setGradientFill (grad);
+        g.fillPath (fillPath);
+
+        g.setColour (theme.accent);
+        g.strokePath (path, juce::PathStrokeType (1.5f));
+    }
+}
+
+//==============================================================================
+void MidiHarmonicHUDEditor::resized()
+{
+    // Mute Button (esquina superior derecha)
+    muteButton.setBounds (getWidth() - 130, 16, 118, 26);
+
+    // Preset (debajo del mute)
+    presetLabel.setBounds (getWidth() - 130, 50, 48, 20);
+    presetCombo.setBounds (getWidth() - 78, 48, 66, 24);
+
+    // Theme (debajo del preset)
+    themeLabel.setBounds (getWidth() - 130, 78, 48, 20);
+    themeCombo.setBounds (getWidth() - 78, 76, 66, 24);
+}
+
+//==============================================================================
+void MidiHarmonicHUDEditor::timerCallback()
+{
+    // Sincronizar tema si el host cambió el parámetro
+    int themeId = 0;
+    if (auto* p = processorRef.apvts.getRawParameterValue (ParamIDs::themeIndex))
+        themeId = (int) p->load();
+
+    if (themeId != cachedThemeId)
+    {
+        cachedThemeId = themeId;
+        theme = ThemeManager::getTheme (themeId);
+        themeCombo.setSelectedId (themeId + 1, juce::dontSendNotification);
+
+        muteButton.setColour (juce::ToggleButton::textColourId, theme.text);
+        muteButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
+        presetLabel.setColour (juce::Label::textColourId, theme.dimText);
+        themeLabel.setColour (juce::Label::textColourId, theme.dimText);
+    }
+
+    // Acorde actual
+    {
+        const juce::ScopedLock sl (processorRef.currentChordLock);
+        cachedChord = processorRef.currentChord;
+    }
+
+    // Historial
+    {
+        const juce::ScopedLock sl (processorRef.chordHistoryLock);
+        cachedHistory = processorRef.chordHistory;
+    }
+
+    // Key
+    {
+        const juce::ScopedLock sl (processorRef.currentKeyLock);
+        cachedKeyText = processorRef.currentKeyText;
+    }
+
+    // Notas activas
+    int count = 0;
+    for (int i = 0; i < 128; ++i)
+    {
+        cachedActiveNotes[static_cast<size_t> (i)] = processorRef.activeMidiNotes[i].load();
+        if (cachedActiveNotes[static_cast<size_t> (i)]) ++count;
+    }
+    cachedActiveCount = count;
+
+    // Análisis
+    cachedConfidence    = processorRef.chordConfidence.load();
+    cachedTension       = processorRef.harmonicTension.load();
+    cachedRootPC        = processorRef.currentRootPC.load();
+    cachedBassPC        = processorRef.currentBassPC.load();
+    cachedInversion     = processorRef.currentInversion.load();
+    cachedKeyConfidence = processorRef.detectedKeyConfidence.load();
+
+    // Suavizado exponencial
+    confidenceSmooth += (cachedConfidence - confidenceSmooth) * 0.20f;
+    tensionSmooth    += (cachedTension    - tensionSmooth)    * 0.15f;
+
+    // Fade del acorde al cambiar
+    juce::uint32 now = juce::Time::getMillisecondCounter();
+    if (cachedChord != lastDisplayedChord)
+    {
+        lastDisplayedChord = cachedChord;
+        chordChangeTimeMs = now;
+    }
+    float elapsed = (float) (now - chordChangeTimeMs) / 350.0f;
+    chordFadeAlpha = juce::jlimit (0.0f, 1.0f, elapsed);
+
+    // Rotación del círculo de quintas hacia la raíz detectada
+    if (cachedRootPC >= 0)
+    {
+        for (int i = 0; i < 12; ++i)
+        {
+            if (kFifthOrderPC[i] == cachedRootPC)
+            {
+                targetRotation = -juce::MathConstants<float>::twoPi * ((float) i / 12.0f);
+                break;
+            }
+        }
+    }
+    circleRotation += (targetRotation - circleRotation) * 0.08f;
+
+    // Animación de pulso
+    circleGlowPhase += 0.05f;
+    if (circleGlowPhase > juce::MathConstants<float>::twoPi)
+        circleGlowPhase -= juce::MathConstants<float>::twoPi;
+
+    repaint();
+}
