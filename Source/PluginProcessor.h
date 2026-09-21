@@ -186,7 +186,8 @@ private:
     // Último preset aplicado a las voces (para evitar llamadas redundantes)
     int lastPreset = -1;
 
-    std::array<std::atomic<int>, 12> pitchClassHistogram;
+    // ⚠️ FIX: histograma como float para que el decay no borre las notas
+    std::array<std::atomic<float>, 12> pitchClassHistogram;
     std::atomic<uint32_t> totalNotesSeen { 0 };
     std::atomic<uint32_t> lastDecayMs { 0 };
 
