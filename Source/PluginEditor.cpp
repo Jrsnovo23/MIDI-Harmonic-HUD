@@ -73,7 +73,6 @@ MidiHarmonicHUDEditor::MidiHarmonicHUDEditor (MidiHarmonicHUDProcessor& p)
         cachedThemeId = id;
         theme = ThemeManager::getTheme (id);
 
-        // Actualizar colores de los controles
         muteButton.setColour (juce::ToggleButton::textColourId, theme.text);
         muteButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
         presetLabel.setColour (juce::Label::textColourId, theme.dimText);
@@ -102,28 +101,23 @@ MidiHarmonicHUDEditor::~MidiHarmonicHUDEditor()
 //==============================================================================
 void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
 {
-    // Fondo con gradiente radial
     juce::ColourGradient bgGrad (theme.bg2, getWidth() * 0.5f, 0.0f,
                                   theme.bg,  getWidth() * 0.5f, (float) getHeight(), true);
     g.setGradientFill (bgGrad);
     g.fillAll();
 
-    // Grid sutil
     g.setColour (juce::Colour (0xffffffff).withAlpha (0.012f));
     for (int x = 0; x < getWidth(); x += 20)
         g.drawVerticalLine (x, 0.0f, (float) getHeight());
     for (int y = 0; y < getHeight(); y += 20)
         g.drawHorizontalLine (y, 0.0f, (float) getWidth());
 
-    // ---- Layout ----
     auto bounds = getLocalBounds().reduced (12);
 
-    // Header
     auto headerArea = bounds.removeFromTop (40);
     bounds.removeFromTop (8);
     drawHeader (g, headerArea);
 
-    // Fila 1: Detecting + Circle of Fifths
     auto row1 = bounds.removeFromTop (260);
     auto detectingArea = row1.removeFromLeft (380);
     row1.removeFromLeft (8);
@@ -134,13 +128,11 @@ void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
 
     bounds.removeFromTop (8);
 
-    // Fila 2: Piano
     auto keyboardArea = bounds.removeFromTop (110);
     drawPianoKeyboard (g, keyboardArea);
 
     bounds.removeFromTop (8);
 
-    // Fila 3: History + Diatonic
     auto row3 = bounds.removeFromTop (160);
     auto historyArea = row3.removeFromLeft (380);
     row3.removeFromLeft (8);
@@ -151,7 +143,6 @@ void MidiHarmonicHUDEditor::paint (juce::Graphics& g)
 
     bounds.removeFromTop (8);
 
-    // Fila 4: Tension graph (ancho completo)
     auto tensionArea = bounds.removeFromTop (100);
     drawTensionGraph (g, tensionArea);
 }
@@ -440,7 +431,6 @@ void MidiHarmonicHUDEditor::drawPianoKeyboard (juce::Graphics& g, juce::Rectangl
     const float blackWidth  = whiteWidth * 0.62f;
     const float blackHeight = keyArea.getHeight() * 0.62f;
 
-    // Teclas blancas
     int whiteIndex = 0;
     for (int n = lowMidi; n <= highMidi; ++n)
     {
@@ -484,7 +474,6 @@ void MidiHarmonicHUDEditor::drawPianoKeyboard (juce::Graphics& g, juce::Rectangl
         ++whiteIndex;
     }
 
-    // Teclas negras
     whiteIndex = 0;
     for (int n = lowMidi; n <= highMidi; ++n)
     {
@@ -586,7 +575,6 @@ void MidiHarmonicHUDEditor::drawDiatonicPanel (juce::Graphics& g, juce::Rectangl
 
     inner.removeFromTop (6);
 
-    // Fila de tonalidad
     auto keyRow = inner.removeFromTop (30);
     g.setColour (theme.dimText);
     g.setFont (juce::Font (juce::FontOptions (11.0f)));
@@ -609,7 +597,6 @@ void MidiHarmonicHUDEditor::drawDiatonicPanel (juce::Graphics& g, juce::Rectangl
 
     inner.removeFromTop (6);
 
-    // Escala diatónica (7 grados)
     static const int majorScale[7] = { 0, 2, 4, 5, 7, 9, 11 };
     static const int minorScale[7] = { 0, 2, 3, 5, 7, 8, 10 };
 
@@ -671,7 +658,6 @@ void MidiHarmonicHUDEditor::drawTensionGraph (juce::Graphics& g, juce::Rectangle
     g.setColour (theme.bg.darker (0.3f));
     g.fillRoundedRectangle (graphArea, 4.0f);
 
-    // Grid horizontal
     g.setColour (juce::Colour (0xffffffff).withAlpha (0.04f));
     for (int i = 1; i < 4; ++i)
     {
@@ -719,13 +705,12 @@ void MidiHarmonicHUDEditor::resized()
     // Mute Button (esquina superior derecha)
     muteButton.setBounds (getWidth() - 130, 16, 118, 26);
 
-    // Preset (debajo del mute)
-    presetLabel.setBounds (getWidth() - 130, 50, 48, 20);
-    presetCombo.setBounds (getWidth() - 78, 48, 66, 24);
+    // ⚠️ FIX: combos más anchos (80 px en vez de 66) para que no se trunquen
+    presetLabel.setBounds (getWidth() - 130, 50, 34, 20);
+    presetCombo.setBounds (getWidth() - 92, 48, 80, 24);
 
-    // Theme (debajo del preset)
-    themeLabel.setBounds (getWidth() - 130, 78, 48, 20);
-    themeCombo.setBounds (getWidth() - 78, 76, 66, 24);
+    themeLabel.setBounds (getWidth() - 130, 78, 34, 20);
+    themeCombo.setBounds (getWidth() - 92, 76, 80, 24);
 }
 
 //==============================================================================
@@ -748,25 +733,21 @@ void MidiHarmonicHUDEditor::timerCallback()
         themeLabel.setColour (juce::Label::textColourId, theme.dimText);
     }
 
-    // Acorde actual
     {
         const juce::ScopedLock sl (processorRef.currentChordLock);
         cachedChord = processorRef.currentChord;
     }
 
-    // Historial
     {
         const juce::ScopedLock sl (processorRef.chordHistoryLock);
         cachedHistory = processorRef.chordHistory;
     }
 
-    // Key
     {
         const juce::ScopedLock sl (processorRef.currentKeyLock);
         cachedKeyText = processorRef.currentKeyText;
     }
 
-    // Notas activas
     int count = 0;
     for (int i = 0; i < 128; ++i)
     {
@@ -775,7 +756,6 @@ void MidiHarmonicHUDEditor::timerCallback()
     }
     cachedActiveCount = count;
 
-    // Análisis
     cachedConfidence    = processorRef.chordConfidence.load();
     cachedTension       = processorRef.harmonicTension.load();
     cachedRootPC        = processorRef.currentRootPC.load();
@@ -783,11 +763,9 @@ void MidiHarmonicHUDEditor::timerCallback()
     cachedInversion     = processorRef.currentInversion.load();
     cachedKeyConfidence = processorRef.detectedKeyConfidence.load();
 
-    // Suavizado exponencial
     confidenceSmooth += (cachedConfidence - confidenceSmooth) * 0.20f;
     tensionSmooth    += (cachedTension    - tensionSmooth)    * 0.15f;
 
-    // Fade del acorde al cambiar
     juce::uint32 now = juce::Time::getMillisecondCounter();
     if (cachedChord != lastDisplayedChord)
     {
@@ -797,7 +775,6 @@ void MidiHarmonicHUDEditor::timerCallback()
     float elapsed = (float) (now - chordChangeTimeMs) / 350.0f;
     chordFadeAlpha = juce::jlimit (0.0f, 1.0f, elapsed);
 
-    // Rotación del círculo de quintas hacia la raíz detectada
     if (cachedRootPC >= 0)
     {
         for (int i = 0; i < 12; ++i)
@@ -811,7 +788,6 @@ void MidiHarmonicHUDEditor::timerCallback()
     }
     circleRotation += (targetRotation - circleRotation) * 0.08f;
 
-    // Animación de pulso
     circleGlowPhase += 0.05f;
     if (circleGlowPhase > juce::MathConstants<float>::twoPi)
         circleGlowPhase -= juce::MathConstants<float>::twoPi;
